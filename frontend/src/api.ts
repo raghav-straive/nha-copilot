@@ -118,6 +118,75 @@ export async function fetchExplorer(token: string, force = false): Promise<Explo
   return res.json();
 }
 
+// ---- Chat with PDFs ----
+export interface LineBox {
+  text: string;
+  x0: number;
+  top: number;
+  x1: number;
+  bottom: number;
+}
+export interface PdfCitation {
+  n: number;
+  pdf_id: string;
+  pdf_name: string;
+  page: number; // 1-based
+  page_width: number; // PDF points
+  page_height: number;
+  bbox: { x0: number; top: number; x1: number; bottom: number };
+  lines: LineBox[];
+  snippet: string;
+  score: number;
+}
+export interface PdfChatResponse {
+  answer: string;
+  citations: PdfCitation[];
+  found: boolean;
+}
+export interface PdfDocument {
+  id: string;
+  name: string;
+  pages: number;
+}
+
+export async function fetchPdfDocuments(token: string): Promise<PdfDocument[]> {
+  const res = await fetch(url("/pdfchat/documents"), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Documents failed (${res.status})`);
+  return (await res.json()).documents ?? [];
+}
+
+export async function sendPdfMessage(token: string, message: string): Promise<PdfChatResponse> {
+  const res = await fetch(url("/pdfchat/message"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) throw new Error(`Request failed (${res.status}): ${await res.text()}`);
+  return res.json();
+}
+
+/** Fetch a PDF (auth-protected) as a blob object URL for the viewer. */
+export async function fetchPdfBlobUrl(token: string, pdfId: string): Promise<string> {
+  const res = await fetch(url(`/pdfchat/file/${pdfId}`), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`PDF fetch failed (${res.status})`);
+  return URL.createObjectURL(await res.blob());
+}
+
+/** Fetch a rendered page image (auth-protected) as a blob object URL. The image
+ * is the same render the OCR boxes were measured against, so fractional highlight
+ * coordinates align exactly. */
+export async function fetchPdfPageUrl(token: string, pdfId: string, page: number): Promise<string> {
+  const res = await fetch(url(`/pdfchat/page/${pdfId}/${page}`), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Page render failed (${res.status})`);
+  return URL.createObjectURL(await res.blob());
+}
+
 export async function sendMessage(
   token: string,
   message: string,

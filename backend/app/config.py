@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1"
+    openai_embedding_model: str = "text-embedding-3-small"
     # A (typically stronger) model for the Explorer's idea generation. Falls back
     # to openai_model when unset. e.g. "gpt-4.1" or a reasoning model.
     openai_explorer_model: str = ""
@@ -64,6 +65,34 @@ class Settings(BaseSettings):
     # Folder holding lgd_master.xlsx (geography). Bundled in backend/reference
     # so a fresh clone is self-contained. Resolved relative to backend/.
     reference_data_dir: str = "reference"
+    # Chat-with-PDFs source: "local" (a folder on disk) or "drive" (a Google Drive
+    # folder). Drive uses the same GOOGLE_CREDENTIALS_JSON service account; share
+    # the Drive folder with that service account's email and set pdf_drive_folder_id.
+    pdf_source: str = "local"
+    pdf_drive_folder_id: str = ""
+    # Local source folder (used when pdf_source=local). Resolved relative to backend/.
+    pdf_dir: str = "pdfs"
+    # Where the built PDF index (chunks + embeddings) is cached.
+    pdf_index_dir: str = "pdf_index"
+    # OCR (for scanned/image PDFs with no text layer).
+    # ocr_engine: which backend renders text from page images:
+    #   "tesseract" (default) — local binary, no cloud/billing, works offline.
+    #   "vision"    — Google Cloud Vision (DOCUMENT_TEXT_DETECTION); needs the
+    #                 Vision API enabled + billing on GCP_PROJECT and valid
+    #                 GOOGLE_APPLICATION_CREDENTIALS. Better on noisy scans, no
+    #                 binary to install (ideal for the GCP deployment).
+    #   "auto"      — use Vision if it is importable and credentials look present,
+    #                 else fall back to tesseract.
+    # If the chosen engine is unavailable at runtime it falls back gracefully
+    # (vision -> tesseract -> none) so ingestion never hard-fails.
+    ocr_engine: str = "tesseract"
+    # Tesseract binary path — if empty, common locations + PATH are auto-detected.
+    tesseract_cmd: str = ""
+    # DPI used to render pages before OCR (both engines). Trades speed vs accuracy.
+    ocr_dpi: int = 220
+    # Optional BCP-47 language hints for Vision, comma-separated (e.g. "en,hi").
+    # Empty lets Vision auto-detect.
+    vision_language_hints: str = ""
 
     # ----- derived helpers -----
     @property
@@ -76,6 +105,18 @@ class Settings(BaseSettings):
         if not p.is_absolute():
             p = (BACKEND_DIR / p).resolve()
         return p
+
+    def _resolve(self, raw: str) -> Path:
+        p = Path(raw)
+        return p if p.is_absolute() else (BACKEND_DIR / p).resolve()
+
+    @property
+    def pdf_dir_path(self) -> Path:
+        return self._resolve(self.pdf_dir)
+
+    @property
+    def pdf_index_path(self) -> Path:
+        return self._resolve(self.pdf_index_dir)
 
     # Maps the CLAUDE.md placeholder keys to the configured table names. The keys
     # here match the {..._TABLE} placeholders substituted in prompt_builder.

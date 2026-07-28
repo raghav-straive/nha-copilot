@@ -24,3 +24,7 @@ Thumbs.db
 
 # Local data extracts
 backend/*.csv
+
+# Chat-with-PDFs: source PDFs (user/Drive data) and the built index cache
+backend/pdfs/
+backend/pdf_index/

@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { sendMessage } from "../api";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import Avatar from "./Avatar";
 import Explorer from "./Explorer";
 import MessageBubble, { type ChatMessage } from "./MessageBubble";
 import WeeklyReport from "./WeeklyReport";
+
+// Lazy — keeps react-pdf / pdfjs out of the main bundle until the tab is opened.
+const PdfChat = lazy(() => import("./PdfChat"));
 
 const SUGGESTIONS = [
   "How many facilities are registered by ownership type?",
@@ -37,7 +40,7 @@ export default function ChatWindow({
   const [busy, setBusy] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
-  const [tab, setTab] = useState<"chat" | "explorer">("chat");
+  const [tab, setTab] = useState<"chat" | "explorer" | "pdfs">("chat");
   const endRef = useRef<HTMLDivElement>(null);
   // Speech-to-text still needs one language hint; auto-pick from the browser
   // locale (Hindi locale -> hi-IN, otherwise Indian English which also handles
@@ -112,15 +115,19 @@ export default function ChatWindow({
           </div>
         </div>
         <div className="flex overflow-hidden rounded-full border border-line text-[13px]">
-          {(["chat", "explorer"] as const).map((t) => (
+          {([
+            { key: "chat", label: "Chat with Data" },
+            { key: "explorer", label: "Data Explorer" },
+            { key: "pdfs", label: "Chat with PDFs" },
+          ] as const).map((t) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-4 py-1.5 font-medium capitalize transition ${
-                tab === t ? "bg-brand text-white" : "bg-surface text-ink-muted hover:bg-brand-light"
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-1.5 font-medium transition ${
+                tab === t.key ? "bg-brand text-white" : "bg-surface text-ink-muted hover:bg-brand-light"
               }`}
             >
-              {t}
+              {t.label}
             </button>
           ))}
         </div>
@@ -138,7 +145,13 @@ export default function ChatWindow({
         </div>
       </header>
 
-      {tab === "explorer" ? (
+      {tab === "pdfs" ? (
+        <div className="min-h-0 flex-1">
+          <Suspense fallback={<div className="p-6 text-sm text-ink-faint">Loading…</div>}>
+            <PdfChat token={token} />
+          </Suspense>
+        </div>
+      ) : tab === "explorer" ? (
         <div className="flex-1 overflow-y-auto">
           <Explorer
             token={token}

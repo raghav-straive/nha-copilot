@@ -17,11 +17,17 @@ class LLMClient(ABC):
     def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
         """Return the model's response parsed as a JSON object."""
 
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return an embedding vector per input text. Optional for subclasses that
+        don't support embeddings (raises by default)."""
+        raise NotImplementedError
+
 
 class OpenAIClient(LLMClient):
     def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
         settings = get_settings()
         self.model = model or settings.openai_model
+        self.embedding_model = settings.openai_embedding_model
         self._api_key = api_key or settings.openai_api_key
         self._client = None
 
@@ -51,6 +57,18 @@ class OpenAIClient(LLMClient):
                 "action": "out_of_scope",
                 "message": "I couldn't produce a valid query for that. Please rephrase.",
             }
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        client = self._get_client()
+        # Batch to stay well within request limits.
+        out: list[list[float]] = []
+        for i in range(0, len(texts), 256):
+            batch = texts[i : i + 256]
+            resp = client.embeddings.create(model=self.embedding_model, input=batch)
+            out.extend([d.embedding for d in resp.data])
+        return out
 
 
 _client: LLMClient | None = None

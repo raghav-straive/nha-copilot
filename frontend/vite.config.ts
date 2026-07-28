@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => {
         "/query-log": "http://localhost:8000",
         "/report": "http://localhost:8000",
         "/explorer": "http://localhost:8000",
+        "/pdfchat": "http://localhost:8000",
         "/health": "http://localhost:8000",
       },
     },
