@@ -19,3 +19,5 @@ Pillow>=10.4
 # Chat-with-PDFs: Google Drive source (optional; pdf_source=drive)
 google-api-python-client>=2.140
 google-auth-httplib2>=0.2
+# Chat-with-PDFs: Google Cloud Vision OCR engine (optional; ocr_engine=vision)
+google-cloud-vision>=3.7,<4

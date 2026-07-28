@@ -74,11 +74,25 @@ class Settings(BaseSettings):
     pdf_dir: str = "pdfs"
     # Where the built PDF index (chunks + embeddings) is cached.
     pdf_index_dir: str = "pdf_index"
-    # OCR (for scanned/image PDFs with no text layer). Tesseract binary path — if
-    # empty, common locations + PATH are auto-detected. ocr_dpi trades speed vs
-    # accuracy when rendering pages for OCR.
+    # OCR (for scanned/image PDFs with no text layer).
+    # ocr_engine: which backend renders text from page images:
+    #   "tesseract" (default) — local binary, no cloud/billing, works offline.
+    #   "vision"    — Google Cloud Vision (DOCUMENT_TEXT_DETECTION); needs the
+    #                 Vision API enabled + billing on GCP_PROJECT and valid
+    #                 GOOGLE_APPLICATION_CREDENTIALS. Better on noisy scans, no
+    #                 binary to install (ideal for the GCP deployment).
+    #   "auto"      — use Vision if it is importable and credentials look present,
+    #                 else fall back to tesseract.
+    # If the chosen engine is unavailable at runtime it falls back gracefully
+    # (vision -> tesseract -> none) so ingestion never hard-fails.
+    ocr_engine: str = "tesseract"
+    # Tesseract binary path — if empty, common locations + PATH are auto-detected.
     tesseract_cmd: str = ""
+    # DPI used to render pages before OCR (both engines). Trades speed vs accuracy.
     ocr_dpi: int = 220
+    # Optional BCP-47 language hints for Vision, comma-separated (e.g. "en,hi").
+    # Empty lets Vision auto-detect.
+    vision_language_hints: str = ""
 
     # ----- derived helpers -----
     @property
