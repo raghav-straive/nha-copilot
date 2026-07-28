@@ -31,6 +31,13 @@ class PdfSource(ABC):
     def read_bytes(self, pdf_id: str) -> bytes:
         ...
 
+    @abstractmethod
+    def get_local_path(self, pdf_id: str) -> str:
+        """Return a local filesystem path to the PDF (downloading to a temp file
+        for remote sources). Lets pdfplumber/pypdfium2 open the file lazily instead
+        of holding the whole file in memory — essential for large scanned PDFs."""
+        ...
+
     def corpus_fingerprint(self) -> str:
         """A single hash over the whole corpus — the index is rebuilt when it changes."""
         h = hashlib.sha256()
@@ -68,10 +75,13 @@ class LocalFolderSource(PdfSource):
         return refs
 
     def read_bytes(self, pdf_id: str) -> bytes:
+        return Path(self.get_local_path(pdf_id)).read_bytes()
+
+    def get_local_path(self, pdf_id: str) -> str:
         path = self._by_id().get(pdf_id)
         if not path:
             raise FileNotFoundError(f"No PDF with id {pdf_id!r}")
-        return path.read_bytes()
+        return str(path)
 
 
 class GoogleDriveSource(PdfSource):
@@ -87,6 +97,7 @@ class GoogleDriveSource(PdfSource):
         s = get_settings()
         self.folder_id = folder_id or s.pdf_drive_folder_id
         self._service = None
+        self._paths: dict[str, str] = {}  # pdf_id -> downloaded temp file path
 
     def _get_service(self):
         if self._service is None:
@@ -138,18 +149,30 @@ class GoogleDriveSource(PdfSource):
         return refs
 
     def read_bytes(self, pdf_id: str) -> bytes:
-        import io
+        import pathlib
+
+        return pathlib.Path(self.get_local_path(pdf_id)).read_bytes()
+
+    def get_local_path(self, pdf_id: str) -> str:
+        import os
+        import tempfile
 
         from googleapiclient.http import MediaIoBaseDownload
 
+        existing = self._paths.get(pdf_id)
+        if existing and os.path.exists(existing):
+            return existing
         svc = self._get_service()
-        request = svc.files().get_media(fileId=pdf_id, supportsAllDrives=True)
-        buf = io.BytesIO()
-        downloader = MediaIoBaseDownload(buf, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        return buf.getvalue()
+        fd, path = tempfile.mkstemp(suffix=".pdf", prefix="pdfchat_")
+        # Stream to disk in chunks so a large PDF never sits fully in memory.
+        with os.fdopen(fd, "wb") as fh:
+            request = svc.files().get_media(fileId=pdf_id, supportsAllDrives=True)
+            downloader = MediaIoBaseDownload(fh, request, chunksize=8 * 1024 * 1024)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        self._paths[pdf_id] = path
+        return path
 
 
 _source: PdfSource | None = None

@@ -20,8 +20,8 @@ def render_page_png(pdf_id: str, page: int, dpi: int = DISPLAY_DPI) -> bytes:
     """Render a 1-based page to PNG bytes. Cached (last 64 pages)."""
     import pypdfium2 as pdfium
 
-    data = get_pdf_source().read_bytes(pdf_id)
-    doc = pdfium.PdfDocument(data)
+    path = get_pdf_source().get_local_path(pdf_id)
+    doc = pdfium.PdfDocument(path)
     try:
         image = doc[page - 1].render(scale=dpi / 72.0).to_pil()
         buf = io.BytesIO()

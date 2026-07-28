@@ -109,8 +109,8 @@ def _build_incremental(src, want_fp: str, force: bool) -> VectorStore:
             reused += 1
         else:
             try:
-                data = src.read_bytes(ref.id)
-                chunks = [c.to_dict() for c in extract_chunks(ref.id, ref.name, data)]
+                path = src.get_local_path(ref.id)
+                chunks = [c.to_dict() for c in extract_chunks(ref.id, ref.name, path)]
                 emb = llm.embed([c["text"] for c in chunks]) if chunks else []
                 entry = {"fp": ref.fingerprint, "name": ref.name, "chunks": chunks, "embeddings": emb}
                 built += 1

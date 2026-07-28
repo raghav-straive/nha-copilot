@@ -44,9 +44,9 @@ def tesseract_available() -> bool:
 
 
 def ocr_document(
-    data: bytes, page_indices: list[int], page_dims: list[tuple[float, float]], dpi: int | None = None
+    pdf_path: str, page_indices: list[int], page_dims: list[tuple[float, float]], dpi: int | None = None
 ) -> dict[int, list[LineBox]]:
-    """OCR the given 0-based page indices. Returns {page_index: [LineBox]} in PDF points."""
+    """OCR the given 0-based page indices. Returns {page_index: [LineBox]} in page fractions."""
     if not page_indices:
         return {}
     if not tesseract_available():
@@ -80,7 +80,7 @@ def ocr_document(
     # the images before the next batch. Bounds memory so a big scanned PDF (dozens
     # of high-DPI page images) never exhausts RAM.
     BATCH = workers
-    pdf = pdfium.PdfDocument(data)
+    pdf = pdfium.PdfDocument(pdf_path)
     try:
         for start in range(0, len(page_indices), BATCH):
             batch = page_indices[start : start + BATCH]

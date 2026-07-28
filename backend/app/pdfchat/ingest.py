@@ -95,11 +95,12 @@ def _union(lines: list[LineBox]) -> dict[str, float]:
     }
 
 
-def extract_chunks(pdf_id: str, pdf_name: str, data: bytes) -> list[Chunk]:
-    """Extract chunks (with line boxes) from a PDF's bytes.
+def extract_chunks(pdf_id: str, pdf_name: str, pdf_path: str) -> list[Chunk]:
+    """Extract chunks (with line boxes) from a PDF file.
 
-    Two-pass: use the embedded text layer where present; for scanned/image pages
-    (no extractable text) fall back to OCR so scanned PDFs are searchable too.
+    Opens by path (not bytes) so large files are read lazily rather than held in
+    memory. Two-pass: use the embedded text layer where present; for scanned/image
+    pages (no extractable text) fall back to OCR so scanned PDFs are searchable too.
     """
     import pdfplumber
 
@@ -107,7 +108,7 @@ def extract_chunks(pdf_id: str, pdf_name: str, data: bytes) -> list[Chunk]:
     page_meta: dict[int, dict] = {}                # 0-based -> {width, height}
     need_ocr: list[int] = []
 
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
+    with pdfplumber.open(pdf_path) as pdf:
         page_dims: list[tuple[float, float]] = []
         for i, page in enumerate(pdf.pages):
             w, h = float(page.width), float(page.height)
@@ -133,7 +134,7 @@ def extract_chunks(pdf_id: str, pdf_name: str, data: bytes) -> list[Chunk]:
         from app.pdfchat.ocr import ocr_document
 
         logger.info("%s: OCR needed for %d page(s)", pdf_name, len(need_ocr))
-        lines_by_page.update(ocr_document(data, need_ocr, page_dims))
+        lines_by_page.update(ocr_document(pdf_path, need_ocr, page_dims))
 
     chunks: list[Chunk] = []
     for i in sorted(lines_by_page):
