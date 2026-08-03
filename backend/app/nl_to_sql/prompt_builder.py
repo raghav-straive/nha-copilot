@@ -56,10 +56,11 @@ def build_user_prompt(
     """Assemble the user turn: the question plus all resolved context."""
     parts = []
     if history:
-        # Recent turns so a short reply (e.g. answering a clarification) keeps the
-        # original question's context. Only role + text, last few turns.
+        # Recent turns so a follow-up like "what about Andhra Pradesh?" keeps the
+        # prior question's metric/context. Only role + text; last ~4 Q&A turns
+        # (8 messages = 4 user + 4 assistant).
         lines = []
-        for h in history[-6:]:
+        for h in history[-8:]:
             role_tag = "User" if h.get("role") == "user" else "Assistant"
             content = str(h.get("content") or "").strip()
             if content:
