@@ -2,7 +2,7 @@
 
 Stored in a local SQLite file because the BigQuery service account is read-only.
 Every turn (success, rejection, or error) is logged; failed queries are the
-primary input for improving CLAUDE.md.
+primary input for improving GOVERNANCE.md.
 """
 from __future__ import annotations
 

@@ -83,7 +83,7 @@ def build_weekly_report(start: date, end: date, llm=None) -> dict:
 
     # ---- Period volume metrics (+ previous period for WoW) ----
     def abha_created(a: date, b: date) -> float:
-        # overall_count is the per-day ABHA count (today_count is ~always 0). See CLAUDE.md §4.
+        # overall_count is the per-day ABHA count (today_count is ~always 0). See GOVERNANCE.md §4.
         return _num(_one(bq, f"SELECT SUM(overall_count) AS v FROM {ABHA} WHERE {_period('created_date', a, b)}").get("v"))
 
     def records_linked(a: date, b: date) -> float:

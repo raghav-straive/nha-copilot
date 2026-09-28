@@ -1,6 +1,6 @@
-"""Builds the system prompt (CLAUDE.md) and the per-turn user prompt.
+"""Builds the system prompt (GOVERNANCE.md) and the per-turn user prompt.
 
-CLAUDE.md is loaded once and cached. The `{..._TABLE}` placeholders (one per
+GOVERNANCE.md is loaded once and cached. The `{..._TABLE}` placeholders (one per
 ABDM table) are replaced with the fully-qualified, backtick-quoted table refs
 from config so the governance doc stays deployment-agnostic.
 """
@@ -12,10 +12,10 @@ from pathlib import Path
 
 from app.config import BACKEND_DIR, get_settings
 
-CLAUDE_MD_PATH = BACKEND_DIR / "CLAUDE.md"
+GOVERNANCE_PATH = BACKEND_DIR / "GOVERNANCE.md"
 
 
-# CLAUDE.md placeholder -> table_map key.
+# GOVERNANCE.md placeholder -> table_map key.
 _PLACEHOLDERS = {
     "{FACILITY_REGISTRY_TABLE}": "facility_registry",
     "{PROFESSIONALS_REGISTRY_TABLE}": "professionals_registry",
@@ -30,20 +30,20 @@ _PLACEHOLDERS = {
 
 
 @lru_cache
-def _load_claude_md() -> str:
+def _load_governance() -> str:
     settings = get_settings()
-    text = Path(CLAUDE_MD_PATH).read_text(encoding="utf-8")
+    text = Path(GOVERNANCE_PATH).read_text(encoding="utf-8")
     for placeholder, key in _PLACEHOLDERS.items():
         text = text.replace(placeholder, settings.table_ref(key))
     return text
 
 
 def load_system_prompt() -> str:
-    """CLAUDE.md (cached) + the live authoritative-types block (appended if the
+    """GOVERNANCE.md (cached) + the live authoritative-types block (appended if the
     schema has been loaded from BigQuery at startup)."""
     from app.db.schema import get_schema_text
 
-    return _load_claude_md() + get_schema_text()
+    return _load_governance() + get_schema_text()
 
 
 def build_user_prompt(

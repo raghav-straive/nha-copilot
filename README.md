@@ -14,14 +14,14 @@ Scan & Pay) across facilities, bridges, states and districts. Data layer is
 ```
 Browser (React) ──HTTPS──▶ FastAPI backend ──read-only SQL──▶ BigQuery
                               │  auth / RBAC
-                              │  NL-to-SQL (CLAUDE.md + OpenAI)
+                              │  NL-to-SQL (GOVERNANCE.md + OpenAI)
                               │  SQL safety (SELECT-only, PII, sqlglot)
                               │  semantic (LGD geography, time)
                               └  query log (SQLite)
 ```
 
 ## Safety model (three independent layers)
-1. **System prompt** (`backend/CLAUDE.md`) — instructs the LLM to emit only a single `SELECT`.
+1. **System prompt** (`backend/GOVERNANCE.md`) — instructs the LLM to emit only a single `SELECT`.
 2. **SQL validation** (`sql_safety/validator.py`) — parses with sqlglot, rejects
    any non-SELECT / multi-statement / PII-column query before execution.
 3. **IAM read-only** — the BigQuery service account is granted only
@@ -36,7 +36,7 @@ inspection.
 ## Data model — 9 ABDM tables (no merged table)
 The co-pilot queries nine tables directly, joined by **facility ID** and/or
 **geography**. There is no pre-built merged table. The authoritative schema,
-join rules, and business rules live in **`backend/CLAUDE.md`** (the governance
+join rules, and business rules live in **`backend/GOVERNANCE.md`** (the governance
 prompt). In brief:
 
 | Table | Use it for |
@@ -51,7 +51,7 @@ prompt). In brief:
 | `state_district_master` | full-India code ↔ name lookup (join carefully — see below) |
 | `integrator_detail` | bridge / software-vendor reference (status, milestone, ownership) |
 
-**Key rules encoded in `CLAUDE.md`** (verified against the data):
+**Key rules encoded in `GOVERNANCE.md`** (verified against the data):
 - Facilities → `COUNT(DISTINCT hfr_id)`. ABHA created → `SUM(overall_count)`
   (`today_count` is ~always 0). HPR → `SUM(registered_count)`. Records linked →
   `SUM(record_linked_count)` (never `hid_linked_count`). Scan & Share →

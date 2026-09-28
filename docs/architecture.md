@@ -6,7 +6,7 @@
 > (React → FastAPI → BigQuery, three-layer SQL safety, RBAC, NL-to-SQL via a
 > governance prompt) still holds, but the **data model, tables, columns, and
 > domain rules here are out of date**. For the current, authoritative schema and
-> rules see **`backend/CLAUDE.md`**, and for setup/usage see the top-level
+> rules see **`backend/GOVERNANCE.md`**, and for setup/usage see the top-level
 > **`README.md`**. Kept for design-rationale history only.
 
 **Version:** 0.3 (Prototype Scope — PM-JAY era, superseded)
@@ -32,7 +32,7 @@ that nobody has anticipated in advance, not just questions from a fixed menu.
 This document covers the prototype architecture, scoped to synthetic data mirroring one
 real NHA financial year. The prototype architecture is the production architecture — no
 structural rework is required to move to production, only data substitution, infrastructure
-scaling, and CLAUDE.md refinement.
+scaling, and GOVERNANCE.md refinement.
 
 ---
 
@@ -41,9 +41,9 @@ scaling, and CLAUDE.md refinement.
 | Principle | Rationale |
 |---|---|
 | Free-form NL-to-SQL over parameterised functions | Officials need exploratory analysis, not just recurring reports. Unanticipated questions must be answerable. |
-| CLAUDE.md as the governance layer | All domain rules, data quality caveats, business definitions, and SQL conventions are encoded in CLAUDE.md. The quality of the tool is directly proportional to the quality of CLAUDE.md. |
+| GOVERNANCE.md as the governance layer | All domain rules, data quality caveats, business definitions, and SQL conventions are encoded in GOVERNANCE.md. The quality of the tool is directly proportional to the quality of GOVERNANCE.md. |
 | SQL transparency by default | Every response includes the SQL used, in a collapsible field. This is the audit trail. |
-| Fail-safe on SQL errors | If generated SQL fails at execution, the system catches the error, tells the user it could not answer, and logs the failure for CLAUDE.md improvement. No automatic retry. |
+| Fail-safe on SQL errors | If generated SQL fails at execution, the system catches the error, tells the user it could not answer, and logs the failure for GOVERNANCE.md improvement. No automatic retry. |
 | Read-only enforcement at two independent layers | System prompt prohibits write SQL. PostgreSQL read-only role enforces it at the database level regardless of what the LLM generates. |
 | Indian data residency | All model inference and data storage must remain on-premise or within approved Indian cloud infrastructure. LLM interface is abstracted for model swapping. |
 | Role-based access control (RBAC) | Officials see only the data their role permits. Enforced at the backend before SQL is executed. |
@@ -77,7 +77,7 @@ scaling, and CLAUDE.md refinement.
 │  ┌────────▼──────────────────────────────▼───────────┐  │
 │  │               NL-to-SQL Layer                     │  │
 │  │   LLM (on-premise / Indian-compliant endpoint)    │  │
-│  │   CLAUDE.md → system prompt                       │  │
+│  │   GOVERNANCE.md → system prompt                       │  │
 │  │   Generates SQL from natural language input       │  │
 │  │   Clarifying dialogue when query is ambiguous     │  │
 │  └────────────────────────┬──────────────────────────┘  │
@@ -171,7 +171,7 @@ application layer. This is enforced at the connection level, not just in applica
 
 ### 4.3 NL-to-SQL Layer
 
-This is the core intelligence layer. The LLM receives the full CLAUDE.md as its system
+This is the core intelligence layer. The LLM receives the full GOVERNANCE.md as its system
 prompt and generates SQL directly from natural language input.
 
 **Why free-form SQL generation over a parameterised function library:**
@@ -179,13 +179,13 @@ prompt and generates SQL directly from natural language input.
 The tool is designed for exploratory analysis by officials who need to ask questions that
 nobody has anticipated in advance. A parameterised function library can only answer
 questions it was pre-programmed to answer — it cannot handle novel analytical questions.
-Free-form SQL generation with a strong CLAUDE.md governance layer enables open-ended
+Free-form SQL generation with a strong GOVERNANCE.md governance layer enables open-ended
 exploration while maintaining correctness through explicit domain rules, data quality
 caveats, and SQL conventions encoded in the system prompt.
 
 The tradeoff is accepted: the same question may produce slightly different SQL on different
 runs. This is mitigated by SQL transparency (every query is shown to the user), query
-logging (all SQL is logged for review), and continuous CLAUDE.md refinement (errors and
+logging (all SQL is logged for review), and continuous GOVERNANCE.md refinement (errors and
 edge cases are encoded as rules). Auditability is achieved through the query log, not
 through a fixed function definition.
 
@@ -208,11 +208,11 @@ User message
     ▼
 2. Context injection
    → Inject session context (confirmed geography, period, prior filters)
-   → Inject CLAUDE.md as system prompt
+   → Inject GOVERNANCE.md as system prompt
     │
     ▼
 3. SQL generation
-   → LLM generates SQL against the schema in CLAUDE.md
+   → LLM generates SQL against the schema in GOVERNANCE.md
    → LLM also generates a plain-language answer template
     │
     ▼
@@ -241,7 +241,7 @@ User message
 ```
 
 **System prompt design principles:**
-- CLAUDE.md is loaded in full as the system prompt at every turn
+- GOVERNANCE.md is loaded in full as the system prompt at every turn
 - The LLM is explicitly instructed to generate only SELECT statements
 - It is instructed to never expose PII columns in query results
 - It is instructed to ask exactly one clarifying question per turn if the query
@@ -355,7 +355,7 @@ and time references into canonical values.
 ## 5. Query Logging
 
 Query logging is a first-class feature, not an afterthought. It serves two purposes:
-auditing what the tool is being used for, and continuously improving CLAUDE.md by
+auditing what the tool is being used for, and continuously improving GOVERNANCE.md by
 identifying cases where the LLM generated incorrect or failed SQL.
 
 **What is logged per query:**
@@ -378,19 +378,19 @@ identifying cases where the LLM generated incorrect or failed SQL.
 
 **Log access:** Admin role only, via `/query-log` endpoint.
 
-**Use for CLAUDE.md improvement:** Failed queries (execution_status = 'error') are the
-primary input for CLAUDE.md refinement. Each failure is reviewed, the root cause
+**Use for GOVERNANCE.md improvement:** Failed queries (execution_status = 'error') are the
+primary input for GOVERNANCE.md refinement. Each failure is reviewed, the root cause
 identified (missing rule, ambiguous column definition, edge case not covered), and a
-fix is encoded as an explicit rule or example in CLAUDE.md.
+fix is encoded as an explicit rule or example in GOVERNANCE.md.
 
 ---
 
-## 6. CLAUDE.md — The Governance Layer
+## 6. GOVERNANCE.md — The Governance Layer
 
-CLAUDE.md is the system prompt loaded into the LLM at every turn. It is the primary
+GOVERNANCE.md is the system prompt loaded into the LLM at every turn. It is the primary
 mechanism for ensuring the LLM generates correct, safe, and domain-appropriate SQL.
 
-**CLAUDE.md contains:**
+**GOVERNANCE.md contains:**
 - Full table schemas with column names, types, and descriptions
 - Known data quality rules and caveats (e.g. pipe-separated procedure codes, m_flag)
 - Business definitions (e.g. exactly how claim paid rate is calculated)
@@ -400,13 +400,13 @@ mechanism for ensuring the LLM generates correct, safe, and domain-appropriate S
 - PII prohibition rules
 - Response format instructions
 
-**CLAUDE.md is a living document.** It is updated as the system is used:
+**GOVERNANCE.md is a living document.** It is updated as the system is used:
 - Every SQL execution error triggers a review
 - Every analytically incorrect answer (caught by users or analysts) triggers a rule addition
 - Version-controlled alongside the codebase
-- Changes to CLAUDE.md are treated as code changes: reviewed, tested, deployed
+- Changes to GOVERNANCE.md are treated as code changes: reviewed, tested, deployed
 
-The current CLAUDE.md for this project is maintained at `backend/CLAUDE.md`.
+The current GOVERNANCE.md for this project is maintained at `backend/GOVERNANCE.md`.
 
 ---
 
@@ -421,7 +421,7 @@ synthetic.
 ### 7.1 Table 1: Treatment / Claims (mirrors TMS)
 
 **78 columns**, matching the real `claim_paid_excel_t` data dictionary exactly. Full schema
-is maintained in CLAUDE.md.
+is maintained in GOVERNANCE.md.
 
 **Geographic scope:** excludes brownfield states (Rajasthan, Maharashtra, Karnataka, Andhra
 Pradesh, Tamil Nadu, Telangana, West Bengal). Covers 548 districts across the remaining
@@ -450,7 +450,7 @@ categories that are never generated as standalone single-visit cases:
 Repeat-visit patients share the same `member_id`, demographics, and — roughly 90% of the
 time — the same `hospital_code` across their visits, reflecting continuity of care. A query
 counting "patients" must use `COUNT(DISTINCT member_id)`, not `COUNT(*)`, or it will
-overcount anyone in recurring care. This distinction should be an explicit CLAUDE.md rule.
+overcount anyone in recurring care. This distinction should be an explicit GOVERNANCE.md rule.
 
 **Hospitals:** a separate hospital master of 5,729 hospitals, roughly 10-11 per district,
 sampled from repeatedly rather than one hospital per row. Hospital codes follow
@@ -476,7 +476,7 @@ the real sample file have no dictionary entry (`family_id`, `member_id`, `bis_fa
 `bis_member_id`, `house_no`, `pincode`, `address`, `src_flag`, `aadhaar_no`, `gender`,
 `year_of_birth`, `name`, `father_name`, `age`, `primary_ben_id`, `match_score`,
 `source_type`, `aadhaar_disp_code`, `yob_secc`). Values for these were generated on
-reasonable assumptions documented inline in CLAUDE.md; several are flagged for NHA/HAAU
+reasonable assumptions documented inline in GOVERNANCE.md; several are flagged for NHA/HAAU
 confirmation in Section 13.
 
 **Geographic scope:** all of India, 786 districts, including the seven brownfield states
@@ -534,7 +534,7 @@ when the schema is confirmed. The architecture accommodates it without structura
 
 The real source files supplied by NHA/HAAU contain quirks that were preserved rather than
 cleaned, because a production-facing query tool needs to handle the data as it actually
-exists, not an idealised version of it. These should each become an explicit CLAUDE.md rule
+exists, not an idealised version of it. These should each become an explicit GOVERNANCE.md rule
 so the LLM does not silently "correct" them into wrong SQL:
 
 | Quirk | Where | Detail |
@@ -615,7 +615,7 @@ Once confirmed, values persist until the user explicitly changes them.
   of system prompt compliance
 - PostgreSQL read-only role enforces SELECT-only at the database level as a third
   independent control
-- PII columns are explicitly listed in CLAUDE.md and in the SQL validation layer;
+- PII columns are explicitly listed in GOVERNANCE.md and in the SQL validation layer;
   any query selecting them is rejected
 - JWT required on all endpoints except `/auth/login`
 - CORS restricted to known frontend origin
@@ -630,7 +630,7 @@ Once confirmed, values persist until the user explicitly changes them.
 ```
 nha-copilot/
 ├── backend/
-│   ├── CLAUDE.md                    # LLM system prompt — governance layer
+│   ├── GOVERNANCE.md                    # LLM system prompt — governance layer
 │   ├── app/
 │   │   ├── main.py                  # FastAPI app entry point
 │   │   ├── auth/                    # JWT logic, RBAC
@@ -638,7 +638,7 @@ nha-copilot/
 │   │   ├── nl_to_sql/               # LLM client, SQL generation pipeline
 │   │   │   ├── client.py            # Abstracted LLM client (swap model here)
 │   │   │   ├── pipeline.py          # Full generation → validation → execution pipeline
-│   │   │   └── prompt_builder.py    # Injects CLAUDE.md + session context into prompt
+│   │   │   └── prompt_builder.py    # Injects GOVERNANCE.md + session context into prompt
 │   │   ├── sql_safety/              # SQL validation and safety layer
 │   │   │   ├── validator.py         # Statement type check, PII check
 │   │   │   └── rbac_filter.py       # Role-based WHERE clause injection

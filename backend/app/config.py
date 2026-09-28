@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     gcp_project: str = "nha-conversational-analytics"
     bq_dataset: str = "nha_conversational_analytics"
     # ABDM digital-adoption tables (no merged table — joined by facility ID /
-    # geography, see CLAUDE.md §10). Override any of these via the env if the
+    # geography, see GOVERNANCE.md §10). Override any of these via the env if the
     # loaded table names differ.
     bq_facility_registry_table: str = "health_facility_registry"
     bq_professionals_registry_table: str = "health_professionals_registry"
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     def pdf_index_path(self) -> Path:
         return self._resolve(self.pdf_index_dir)
 
-    # Maps the CLAUDE.md placeholder keys to the configured table names. The keys
+    # Maps the GOVERNANCE.md placeholder keys to the configured table names. The keys
     # here match the {..._TABLE} placeholders substituted in prompt_builder.
     @property
     def table_map(self) -> dict[str, str]:

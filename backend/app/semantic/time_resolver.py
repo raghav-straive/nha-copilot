@@ -15,7 +15,7 @@ from datetime import date
 
 # ABDM prototype data window (broadest span across all tables; scan_pay_count
 # reaches back to 2024-07-26, the rest start 2026-01-01, all end ~2026-07-10).
-# The model knows the precise per-table ranges from CLAUDE.md §10; this is a
+# The model knows the precise per-table ranges from GOVERNANCE.md §10; this is a
 # coarse "is the whole ask before/after any data exists" guard.
 DATA_WINDOW_START = date(2024, 7, 1)
 DATA_WINDOW_END = date(2026, 7, 11)  # exclusive upper bound
