@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.db.bigquery_client import get_bigquery_client
 from app.nl_to_sql.client import get_llm_client
@@ -21,9 +22,14 @@ from app.nl_to_sql.prompt_builder import build_user_prompt, load_system_prompt
 from app.semantic.geography import get_geography
 from app.semantic.time_resolver import get_time_resolver
 from app.sql_safety.rbac_filter import check_rbac
-from app.sql_safety.validator import validate_sql
+from app.sql_safety.validator import MAX_ROWS, enforce_row_limit, validate_sql
 
 logger = logging.getLogger(__name__)
+
+# The data is Indian, so the clock should be too. On a UTC-hosted server,
+# "how many ABHAs were created today?" asked at 03:00 IST would otherwise
+# resolve to yesterday in India — a silently wrong answer.
+IST = ZoneInfo("Asia/Kolkata")
 
 FAILURE_MESSAGE = (
     "I was unable to answer that question. This has been logged for review. "
@@ -97,7 +103,7 @@ def run_turn(
     today: date | None = None,
     history: list[dict] | None = None,
 ) -> TurnResult:
-    resolved = resolve_entities(question, today=today)
+    resolved = resolve_entities(question, today=today or datetime.now(IST).date())
 
     # ---- Step 2: deterministic short-circuits (semantic layer decisions) ----
     if resolved["ambiguous_geography"]:
@@ -172,28 +178,38 @@ def run_turn(
             sql = ascii_sql
 
     # ---- Step 4: SQL safety ----
+    # `result` is set early only when a corrective retry already executed.
+    result = None
     v = validate_sql(sql)
     if not v.ok:
         logger.warning("SQL rejected by validator: %s", v.reason)
-        return TurnResult(
-            action="error", message=FAILURE_MESSAGE, sql=sql,
-            execution_status="rejected", error_message=v.reason,
-            resolved=resolved, context_chips=chips,
-        )
+        # Give the model one chance to fix a mechanical rejection (most often a
+        # `SELECT *` projection) exactly as we do for an execution error.
+        # _retry_sql re-validates, re-checks RBAC, and executes.
+        fixed = _retry_sql(llm, system_prompt, user_prompt, sql, v.reason, role)
+        if fixed is None:
+            return TurnResult(
+                action="error", message=FAILURE_MESSAGE, sql=sql,
+                execution_status="rejected", error_message=v.reason,
+                resolved=resolved, context_chips=chips,
+            )
+        sql, result = fixed
 
     # ---- Step 5: RBAC ----
-    rbac = check_rbac(sql, role)
-    if not rbac.allowed:
-        return TurnResult(
-            action="out_of_scope", message=rbac.reason, sql=None,
-            execution_status="rbac_blocked",
-            error_message=f"blocked columns: {rbac.blocked_columns}",
-            resolved=resolved, context_chips=chips,
-        )
+    if result is None:
+        rbac = check_rbac(sql, role)
+        if not rbac.allowed:
+            return TurnResult(
+                action="out_of_scope", message=rbac.reason, sql=None,
+                execution_status="rbac_blocked",
+                error_message=f"blocked columns: {rbac.blocked_columns}",
+                resolved=resolved, context_chips=chips,
+            )
 
     # ---- Step 6: execution (with one corrective retry on error) ----
-    bq = get_bigquery_client()
-    result = bq.run_select(sql)
+    if result is None:
+        sql = enforce_row_limit(sql)
+        result = get_bigquery_client().run_select(sql)
     if not result.ok:
         logger.warning("Execution error, attempting one corrective retry: %s", result.error)
         fixed = _retry_sql(llm, system_prompt, user_prompt, sql, result.error, role)
@@ -219,6 +235,13 @@ def run_turn(
         if analysis and analysis.get("summary")
         else _format_answer(answer_template, result.columns, result.rows)
     )
+    # The row cap is a safety limit, not a filter the user asked for — say so,
+    # otherwise a truncated aggregate reads as a complete one.
+    if len(result.rows) >= MAX_ROWS:
+        answer += (
+            f"\n\n(Showing the first {MAX_ROWS:,} rows — narrow the question "
+            "for a complete answer.)"
+        )
     return TurnResult(
         action="answer",
         answer=answer,
@@ -258,6 +281,7 @@ def _retry_sql(llm, system_prompt, user_prompt, bad_sql, error, role):
         return None
     if not validate_sql(sql2).ok or not check_rbac(sql2, role).allowed:
         return None
+    sql2 = enforce_row_limit(sql2)
     result2 = get_bigquery_client().run_select(sql2)
     return (sql2, result2)
 

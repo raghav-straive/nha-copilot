@@ -8,7 +8,13 @@ User=nha
 Group=nha
 WorkingDirectory=/opt/nha-copilot/backend
 EnvironmentFile=/etc/nha-copilot/env
-ExecStart=/opt/nha-copilot/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
+# --proxy-headers + --forwarded-allow-ips make request.client.host the real
+# client address rather than nginx's, which the access log and the rate-limit
+# IP fallback both rely on. Chat sessions are shared across workers via SQLite
+# (backend/sessions.sqlite), so --workers 2 is safe; note the Explorer cache and
+# the PDF index are still built per worker, which costs duplicate work on a cold
+# start but is not incorrect.
+ExecStart=/opt/nha-copilot/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=always
 RestartSec=3
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -17,7 +18,15 @@ from typing import Any
 from app.config import BACKEND_DIR
 
 DB_PATH = BACKEND_DIR / "query_log.sqlite"
+MAX_FETCH = 2000
 _lock = Lock()
+
+
+def _connect():
+    # `with sqlite3.connect(...)` commits or rolls back but does NOT close the
+    # connection — that leaks a handle per logged turn. `closing(...)` supplies
+    # the close; entering `conn` as well keeps the transaction behaviour.
+    return closing(sqlite3.connect(DB_PATH, timeout=10))
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_log (
@@ -39,9 +48,8 @@ CREATE TABLE IF NOT EXISTS query_log (
 
 
 def init_db() -> None:
-    with _lock, sqlite3.connect(DB_PATH) as conn:
+    with _lock, _connect() as conn, conn:
         conn.execute(_SCHEMA)
-        conn.commit()
 
 
 def log_query(
@@ -74,16 +82,20 @@ def log_query(
         row_count,
         response_shown,
     )
-    with _lock, sqlite3.connect(DB_PATH) as conn:
+    with _lock, _connect() as conn, conn:
         conn.execute(
             "INSERT INTO query_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", row
         )
-        conn.commit()
     return query_id
 
 
 def fetch_logs(limit: int = 200) -> list[dict]:
-    with _lock, sqlite3.connect(DB_PATH) as conn:
+    # Clamp: an unbounded limit turns this into a full-table scan.
+    try:
+        limit = max(1, min(int(limit), MAX_FETCH))
+    except (TypeError, ValueError):
+        limit = 200
+    with _lock, _connect() as conn, conn:
         conn.row_factory = sqlite3.Row
         cur = conn.execute(
             "SELECT * FROM query_log ORDER BY timestamp DESC LIMIT ?", (limit,)

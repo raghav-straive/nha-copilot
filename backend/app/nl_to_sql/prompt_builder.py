@@ -40,7 +40,15 @@ def _load_governance() -> str:
 
 def load_system_prompt() -> str:
     """GOVERNANCE.md (cached) + the live authoritative-types block (appended if the
-    schema has been loaded from BigQuery at startup)."""
+    schema has been loaded from BigQuery at startup).
+
+    This string is byte-identical on every turn, which lets the provider serve
+    the ~8k-token prefix from its prompt cache at a discount. Keep it that way:
+    do NOT move per-turn data (the date, the caller's role, resolved codes,
+    history) in here for convenience — that would invalidate the cache on every
+    request and multiply prompt cost. Volatile context belongs in the user
+    message built by build_user_prompt below.
+    """
     from app.db.schema import get_schema_text
 
     return _load_governance() + get_schema_text()

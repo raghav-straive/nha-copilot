@@ -44,6 +44,29 @@ def test_admin_allowed_everything():
     assert r.allowed
 
 
+def test_rbac_denies_unparseable_sql():
+    # Fails CLOSED: this is a security control and must not assume the validator
+    # already vetted the input (the two use different sqlglot entry points).
+    for bad in ("SELECT FROM WHERE ((((", "this is not sql at all"):
+        assert not check_rbac(bad, "viewer").allowed
+
+
+def test_rbac_blocked_columns_defaults_to_list():
+    # Was declared list[str] but defaulted to None, so callers formatting it in
+    # a log line printed "None" instead of an empty list.
+    assert check_rbac(_sql("state_code"), "viewer").blocked_columns == []
+
+
+def test_star_projection_is_stopped_by_the_validator():
+    # RBAC cannot see through a star (no exp.Column nodes to enumerate), so the
+    # validator is the layer that must stop it. Assert the pair holds together.
+    from app.sql_safety.validator import validate_sql
+
+    sql = f"SELECT * FROM {FAC} LIMIT 50"
+    assert check_rbac(sql, "viewer").allowed, "RBAC is column-based; star is invisible to it"
+    assert not validate_sql(sql).ok, "the validator must reject the star"
+
+
 def test_viewer_blocked_on_numeric_district_column():
     # `district` (numeric LGD code column in linked_facility / scan_pay_count)
     r = check_rbac(

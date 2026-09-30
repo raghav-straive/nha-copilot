@@ -33,6 +33,13 @@ _FORBIDDEN_EXPR = (
 )
 
 
+# Ceiling on rows returned to the caller. The BigQuery job's
+# maximum_bytes_billed caps how much the query *scans*, not how much it
+# *returns* — so a broad question ("list every facility") could otherwise stream
+# an unbounded result set into the browser and the analysis pass.
+MAX_ROWS = 5000
+
+
 @dataclass
 class ValidationResult:
     ok: bool
@@ -67,6 +74,17 @@ def validate_sql(sql: str) -> ValidationResult:
     if not _is_read_only_select(stmt):
         return ValidationResult(
             ok=False, reason="Only read-only SELECT queries are permitted."
+        )
+
+    # A star projection defeats BOTH the PII scan below and the RBAC tier check
+    # in rbac_filter.py: each works by enumerating the exp.Column nodes a query
+    # references, and `SELECT *` references none — so both find nothing to block
+    # and a viewer could receive facility-level (or reintroduced PII) columns.
+    # Requiring explicit columns closes that gap and keeps scan cost predictable.
+    if _has_star_projection(stmt):
+        return ValidationResult(
+            ok=False,
+            reason="SELECT * is not permitted; list the required columns explicitly.",
         )
 
     # Defence in depth: reject if any write keyword appears anywhere in the tree.
@@ -112,3 +130,54 @@ def _is_read_only_select(stmt: exp.Expression) -> bool:
     if isinstance(stmt, exp.Subquery):
         return _is_read_only_select(stmt.this)
     return False
+
+
+def _output_selects(stmt: exp.Expression):
+    """Yield the SELECT nodes whose projections actually reach the caller.
+
+    A star deeper in the tree (inside a subquery feeding an explicit outer
+    projection) is harmless: the outer projection still names its columns, so
+    the PII and RBAC scans see them. Only the output level needs checking.
+    """
+    if isinstance(stmt, (exp.With, exp.Subquery)):
+        yield from _output_selects(stmt.this)
+    elif isinstance(stmt, (exp.Union, exp.Intersect, exp.Except)):
+        yield from _output_selects(stmt.this)
+        yield from _output_selects(stmt.expression)
+    elif isinstance(stmt, exp.Select):
+        yield stmt
+
+
+def _has_star_projection(stmt: exp.Expression) -> bool:
+    """True if the query's output projection is `*` or `alias.*`.
+
+    This inspects Select.expressions (the projection list) ONLY. It must never
+    use find_all(exp.Star): `COUNT(*)` also contains an exp.Star node, so a
+    tree-wide search would reject the most common aggregate in this dataset
+    (and four queries in report/service.py).
+    """
+    for select in _output_selects(stmt):
+        for proj in select.expressions:
+            if isinstance(proj, exp.Star):
+                return True
+            # `t.*` parses as a Column whose `this` is a Star.
+            if isinstance(proj, exp.Column) and isinstance(proj.this, exp.Star):
+                return True
+    return False
+
+
+def enforce_row_limit(sql: str, max_rows: int = MAX_ROWS) -> str:
+    """Append a LIMIT when the query has none, or a looser one than max_rows.
+
+    Returns the SQL unchanged if it already limits to <= max_rows, or if
+    anything about the rewrite is uncertain — a missing cap is better than a
+    corrupted query.
+    """
+    try:
+        stmt = sqlglot.parse_one(sql, read="bigquery")
+        existing = stmt.args.get("limit")
+        if existing is not None and int(existing.expression.name) <= max_rows:
+            return sql
+        return stmt.limit(max_rows).sql(dialect="bigquery")
+    except Exception:  # noqa: BLE001 - never break a valid query just to cap it
+        return sql

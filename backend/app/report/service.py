@@ -6,18 +6,27 @@ ABHA creation, facility & professional registration, health-record linking, and
 Scan & Share / Scan & Pay transactions — with week-over-week change, geography
 and ownership breakdowns, and bridge/integrator status. Deterministic SQL — the
 LLM only writes the executive summary.
+
+Every aggregate here is independent of the others, so they are submitted to
+BigQuery concurrently (see _rows_many). Sequentially this was ~20 round-trips at
+1-2s of job latency each, which put the report at 20-40s to load.
 """
 from __future__ import annotations
 
 import decimal
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from app.config import get_settings
 from app.db.bigquery_client import get_bigquery_client
 
 logger = logging.getLogger(__name__)
+
+# BigQuery jobs are I/O-bound (submit, then wait), so threads are the right tool
+# here. Kept modest to stay well inside per-project concurrent-query limits.
+_MAX_WORKERS = 8
 
 
 def _num(x) -> float:
@@ -46,9 +55,22 @@ def _rows(bq, sql: str) -> list[dict]:
     return _clean(res.rows)
 
 
-def _one(bq, sql: str) -> dict:
-    r = _rows(bq, sql)
-    return r[0] if r else {}
+def _rows_many(bq, queries: dict[str, str]) -> dict[str, list[dict]]:
+    """Run independent aggregates concurrently.
+
+    Each query still degrades to [] on failure exactly as _rows does, so one bad
+    query cannot take down the whole report.
+    """
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
+        futures = {k: pool.submit(_rows, bq, sql) for k, sql in queries.items()}
+        out: dict[str, list[dict]] = {}
+        for k, f in futures.items():
+            try:
+                out[k] = f.result()
+            except Exception:  # noqa: BLE001 - keep the rest of the report
+                logger.warning("Report query %r raised", k, exc_info=True)
+                out[k] = []
+        return out
 
 
 def _period(col: str, start: date, end: date, datetime_col: bool = False) -> str:
@@ -78,105 +100,108 @@ def build_weekly_report(start: date, end: date, llm=None) -> dict:
     SS = s.table_ref("scan_share")
     SP = s.table_ref("scan_pay")
     BR = s.table_ref("bridge_integrator")
+    # state_district_master is one row per district — collapse it before joining
+    # on state_code alone, or a state-level aggregate fans out. See GOVERNANCE.md.
+    SM = f"(SELECT DISTINCT state_code, state_name FROM {s.table_ref('state_district_master')})"
 
     prev_start = start - (end - start)
 
-    # ---- Period volume metrics (+ previous period for WoW) ----
-    def abha_created(a: date, b: date) -> float:
-        # overall_count is the per-day ABHA count (today_count is ~always 0). See GOVERNANCE.md §4.
-        return _num(_one(bq, f"SELECT SUM(overall_count) AS v FROM {ABHA} WHERE {_period('created_date', a, b)}").get("v"))
+    # ---- One batch: every aggregate the report needs, all independent. ----
+    queries: dict[str, str] = {
+        # Period volume metrics. overall_count is the per-day ABHA count
+        # (today_count is ~always 0). See GOVERNANCE.md §4.
+        "abha": f"SELECT SUM(overall_count) AS v FROM {ABHA} WHERE {_period('created_date', start, end)}",
+        "linked": f"SELECT SUM(record_linked_count) AS v FROM {LINK} WHERE {_period('created_date', start, end, True)}",
+        "ss_txns": f"SELECT SUM(counts) AS v FROM {SS} WHERE {_period('date_created', start, end, True)}",
+        "sp_txns": f"SELECT SUM(facility_count) AS v FROM {SP} WHERE {_period('date_created', start, end)}",
+        # Same four over the previous period, for week-over-week.
+        "abha_prev": f"SELECT SUM(overall_count) AS v FROM {ABHA} WHERE {_period('created_date', prev_start, start)}",
+        "linked_prev": f"SELECT SUM(record_linked_count) AS v FROM {LINK} WHERE {_period('created_date', prev_start, start, True)}",
+        "ss_txns_prev": f"SELECT SUM(counts) AS v FROM {SS} WHERE {_period('date_created', prev_start, start, True)}",
+        "sp_txns_prev": f"SELECT SUM(facility_count) AS v FROM {SP} WHERE {_period('date_created', prev_start, start)}",
+        # Remaining scalars.
+        "sp_amt": f"SELECT SUM(payment_amount) AS v FROM {SP} WHERE {_period('date_created', start, end)}",
+        "fac_verified": f"SELECT COUNT(DISTINCT hfr_id) AS v FROM {FAC} WHERE {_period('verified_date', start, end)}",
+        "hpr_verified": f"SELECT SUM(registered_count) AS v FROM {HPR} WHERE {_period('created_date', start, end)}",
+        "active_links": f"SELECT COUNT(*) AS v FROM {LFAC} WHERE active = 't'",
+        "states_covered": f"SELECT COUNT(DISTINCT state_code) AS v FROM {ABHA} WHERE {_period('created_date', start, end)}",
+        # Geography breakdowns.
+        "abha_by_state": f"""SELECT sm.state_name AS state, SUM(a.overall_count) AS abha_created
+            FROM {ABHA} a LEFT JOIN {SM} sm ON a.state_code = sm.state_code
+            WHERE {_period('a.created_date', start, end)}
+            GROUP BY state ORDER BY abha_created DESC LIMIT 10""",
+        "scan_share_by_state": f"""SELECT state_name AS state, SUM(counts) AS transactions
+            FROM {SS} WHERE {_period('date_created', start, end, True)}
+            GROUP BY state ORDER BY transactions DESC LIMIT 10""",
+        "linked_by_state": f"""SELECT sm.state_name AS state, SUM(l.record_linked_count) AS records_linked
+            FROM {LINK} l LEFT JOIN {SM} sm ON l.state_code = sm.state_code
+            WHERE {_period('l.created_date', start, end, True)}
+            GROUP BY state ORDER BY records_linked DESC LIMIT 10""",
+        # Facility profile.
+        "facilities_by_ownership": f"""SELECT facility_ownership AS ownership, COUNT(DISTINCT hfr_id) AS facilities
+            FROM {FAC} WHERE {_period('verified_date', start, end)}
+            GROUP BY ownership ORDER BY facilities DESC""",
+        "facilities_by_type": f"""SELECT facility_type_name AS facility_type, COUNT(DISTINCT hfr_id) AS facilities
+            FROM {FAC} WHERE {_period('verified_date', start, end)} AND facility_type_name IS NOT NULL
+            GROUP BY facility_type ORDER BY facilities DESC LIMIT 8""",
+        # Professionals by type (d/n/p).
+        "hpr_by_type": f"""SELECT hpr_type, SUM(registered_count) AS professionals
+            FROM {HPR} WHERE {_period('created_date', start, end)}
+            GROUP BY hpr_type ORDER BY professionals DESC""",
+        # Scan & Pay by payment status.
+        "scan_pay_by_status": f"""SELECT payment_status, COUNT(*) AS records, SUM(payment_amount) AS amount
+            FROM {SP} WHERE {_period('date_created', start, end)}
+            GROUP BY payment_status ORDER BY records DESC""",
+        # Top bridges by active facility links.
+        "links_by_bridge": f"""SELECT bridge_name, COUNT(*) AS active_links
+            FROM {LFAC} WHERE active = 't' AND bridge_name IS NOT NULL
+            GROUP BY bridge_name ORDER BY active_links DESC LIMIT 10""",
+        # Bridge / integrator status (reference, not date-bound).
+        "bridge_by_status": f"""SELECT status, COUNT(*) AS bridges
+            FROM {BR} WHERE status IS NOT NULL GROUP BY status ORDER BY bridges DESC""",
+    }
+    res = _rows_many(bq, queries)
 
-    def records_linked(a: date, b: date) -> float:
-        return _num(_one(bq, f"SELECT SUM(record_linked_count) AS v FROM {LINK} WHERE {_period('created_date', a, b, True)}").get("v"))
+    def scalar(key: str) -> float:
+        rows = res.get(key) or []
+        return _num(rows[0].get("v")) if rows else 0.0
 
-    def scan_share(a: date, b: date) -> float:
-        return _num(_one(bq, f"SELECT SUM(counts) AS v FROM {SS} WHERE {_period('date_created', a, b, True)}").get("v"))
-
-    def scan_pay_txns(a: date, b: date) -> float:
-        return _num(_one(bq, f"SELECT SUM(facility_count) AS v FROM {SP} WHERE {_period('date_created', a, b)}").get("v"))
-
-    abha = abha_created(start, end)
-    linked = records_linked(start, end)
-    ss_txns = scan_share(start, end)
-    sp_txns = scan_pay_txns(start, end)
-
-    sp_amt = _num(_one(bq, f"SELECT SUM(payment_amount) AS v FROM {SP} WHERE {_period('date_created', start, end)}").get("v"))
-    fac_verified = _num(_one(bq, f"SELECT COUNT(DISTINCT hfr_id) AS v FROM {FAC} WHERE {_period('verified_date', start, end)}").get("v"))
-    hpr_verified = _num(_one(bq, f"SELECT SUM(registered_count) AS v FROM {HPR} WHERE {_period('created_date', start, end)}").get("v"))
-    active_links = _num(_one(bq, f"SELECT COUNT(*) AS v FROM {LFAC} WHERE active = 't'").get("v"))
-    states_covered = _num(_one(bq, f"SELECT COUNT(DISTINCT state_code) AS v FROM {ABHA} WHERE {_period('created_date', start, end)}").get("v"))
+    abha = scalar("abha")
+    linked = scalar("linked")
+    ss_txns = scalar("ss_txns")
+    sp_txns = scalar("sp_txns")
+    fac_verified = scalar("fac_verified")
 
     kpis = {
         "abha_created": int(abha),
         "facilities_verified": int(fac_verified),
-        "hpr_verified": int(hpr_verified),
+        "hpr_verified": int(scalar("hpr_verified")),
         "records_linked": int(linked),
         "scan_share_txns": int(ss_txns),
         "scan_pay_txns": int(sp_txns),
-        "scan_pay_amount": round(sp_amt, 2),
-        "active_facility_links": int(active_links),
-        "states_covered": int(states_covered),
+        "scan_pay_amount": round(scalar("sp_amt"), 2),
+        "active_facility_links": int(scalar("active_links")),
+        "states_covered": int(scalar("states_covered")),
         "wow": {
-            "abha_created": _delta(abha, abha_created(prev_start, start)),
-            "records_linked": _delta(linked, records_linked(prev_start, start)),
-            "scan_share_txns": _delta(ss_txns, scan_share(prev_start, start)),
-            "scan_pay_txns": _delta(sp_txns, scan_pay_txns(prev_start, start)),
+            "abha_created": _delta(abha, scalar("abha_prev")),
+            "records_linked": _delta(linked, scalar("linked_prev")),
+            "scan_share_txns": _delta(ss_txns, scalar("ss_txns_prev")),
+            "scan_pay_txns": _delta(sp_txns, scalar("sp_txns_prev")),
         },
     }
-
-    # ---- Geography breakdowns (resolve state_code -> name via the master) ----
-    SM = f"(SELECT DISTINCT state_code, state_name FROM {s.table_ref('state_district_master')})"
-    abha_by_state = _rows(bq, f"""SELECT sm.state_name AS state, SUM(a.overall_count) AS abha_created
-        FROM {ABHA} a LEFT JOIN {SM} sm ON a.state_code = sm.state_code
-        WHERE {_period('a.created_date', start, end)}
-        GROUP BY state ORDER BY abha_created DESC LIMIT 10""")
-    scan_share_by_state = _rows(bq, f"""SELECT state_name AS state, SUM(counts) AS transactions
-        FROM {SS} WHERE {_period('date_created', start, end, True)}
-        GROUP BY state ORDER BY transactions DESC LIMIT 10""")
-    linked_by_state = _rows(bq, f"""SELECT sm.state_name AS state, SUM(l.record_linked_count) AS records_linked
-        FROM {LINK} l LEFT JOIN {SM} sm ON l.state_code = sm.state_code
-        WHERE {_period('l.created_date', start, end, True)}
-        GROUP BY state ORDER BY records_linked DESC LIMIT 10""")
-
-    # ---- Facility profile ----
-    facilities_by_ownership = _rows(bq, f"""SELECT facility_ownership AS ownership, COUNT(DISTINCT hfr_id) AS facilities
-        FROM {FAC} WHERE {_period('verified_date', start, end)}
-        GROUP BY ownership ORDER BY facilities DESC""")
-    facilities_by_type = _rows(bq, f"""SELECT facility_type_name AS facility_type, COUNT(DISTINCT hfr_id) AS facilities
-        FROM {FAC} WHERE {_period('verified_date', start, end)} AND facility_type_name IS NOT NULL
-        GROUP BY facility_type ORDER BY facilities DESC LIMIT 8""")
-
-    # ---- Professionals by type (d/n/p) ----
-    hpr_by_type = _rows(bq, f"""SELECT hpr_type, SUM(registered_count) AS professionals
-        FROM {HPR} WHERE {_period('created_date', start, end)}
-        GROUP BY hpr_type ORDER BY professionals DESC""")
-
-    # ---- Scan & Pay by payment status ----
-    scan_pay_by_status = _rows(bq, f"""SELECT payment_status, COUNT(*) AS records, SUM(payment_amount) AS amount
-        FROM {SP} WHERE {_period('date_created', start, end)}
-        GROUP BY payment_status ORDER BY records DESC""")
-
-    # ---- Top bridges by active facility links ----
-    links_by_bridge = _rows(bq, f"""SELECT bridge_name, COUNT(*) AS active_links
-        FROM {LFAC} WHERE active = 't' AND bridge_name IS NOT NULL
-        GROUP BY bridge_name ORDER BY active_links DESC LIMIT 10""")
-
-    # ---- Bridge / integrator status (reference, not date-bound) ----
-    bridge_by_status = _rows(bq, f"""SELECT status, COUNT(*) AS bridges
-        FROM {BR} WHERE status IS NOT NULL GROUP BY status ORDER BY bridges DESC""")
 
     report = {
         "period": {"start": start.isoformat(), "end": end.isoformat()},
         "kpis": kpis,
-        "abha_by_state": abha_by_state,
-        "scan_share_by_state": scan_share_by_state,
-        "linked_by_state": linked_by_state,
-        "facilities_by_ownership": facilities_by_ownership,
-        "facilities_by_type": facilities_by_type,
-        "hpr_by_type": hpr_by_type,
-        "scan_pay_by_status": scan_pay_by_status,
-        "links_by_bridge": links_by_bridge,
-        "bridge_by_status": bridge_by_status,
+        "abha_by_state": res["abha_by_state"],
+        "scan_share_by_state": res["scan_share_by_state"],
+        "linked_by_state": res["linked_by_state"],
+        "facilities_by_ownership": res["facilities_by_ownership"],
+        "facilities_by_type": res["facilities_by_type"],
+        "hpr_by_type": res["hpr_by_type"],
+        "scan_pay_by_status": res["scan_pay_by_status"],
+        "links_by_bridge": res["links_by_bridge"],
+        "bridge_by_status": res["bridge_by_status"],
         "analysis": None,
     }
     total_activity = abha + linked + ss_txns + sp_txns + fac_verified

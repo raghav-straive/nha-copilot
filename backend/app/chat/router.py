@@ -67,6 +67,9 @@ def chat_message(
             "context_chips": result.context_chips,
         }
     )
+    # Sessions live in SQLite now, shared across workers — mutating the object
+    # in memory is not enough, it has to be written back.
+    store.save(session)
 
     # Query log (every turn).
     log_query(

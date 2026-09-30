@@ -1,8 +1,13 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.1
+# pydantic 2.10.4 has no prebuilt wheel for Python 3.14 and falls back to a Rust
+# source build; 2.13+ ships cp314 wheels.
+pydantic>=2.13,<3
+pydantic-settings>=2.8,<3
 python-dotenv==1.0.1
+# zoneinfo needs a tz database, which Windows does not ship. Required for the
+# Asia/Kolkata resolution in nl_to_sql/pipeline.py.
+tzdata>=2024.2 ; sys_platform == "win32"
 google-cloud-bigquery==3.27.0
 openai==2.31.0
 sqlglot==26.0.1

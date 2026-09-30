@@ -124,6 +124,11 @@ shared **geography columns**. See §10 for exactly how to join them.
 in principle appear more than once if re-verified — prefer `DISTINCT` over `COUNT(*)`
 unless the question is explicitly about applications/records, not distinct facilities).
 
+**Never use `SELECT *` or `table.*`.** Always list the columns you need. A star
+projection is rejected before execution, because the access-level and privacy
+checks work by inspecting the columns a query names and a star names none.
+`COUNT(*)` is fine — the restriction is only on the output column list.
+
 ---
 
 ## 3. `{PROFESSIONALS_REGISTRY_TABLE}` — HPR registration

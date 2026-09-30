@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from threading import Lock
 from typing import Any
 
 from app.config import get_settings
@@ -22,6 +23,7 @@ from app.pdfchat.store import VectorStore
 logger = logging.getLogger(__name__)
 
 _store: VectorStore | None = None
+_LOCK = Lock()
 TOP_K = 8
 # Bump when the chunk/box format changes so the on-disk cache is rebuilt.
 INDEX_VERSION = 3
@@ -64,7 +66,12 @@ def _save_pdf_cache(data: dict[str, Any]) -> None:
     p = _cache_path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data), encoding="utf-8")
+        # Write-then-rename so the swap is atomic: a crash mid-write would
+        # otherwise leave a truncated file, and recovery means re-embedding the
+        # entire corpus (the most expensive operation in the app).
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(p)
     except Exception:  # noqa: BLE001
         logger.warning("Could not write PDF cache", exc_info=True)
 
@@ -79,8 +86,13 @@ def get_index(force: bool = False) -> VectorStore:
     if not force and _store is not None and _store.meta.get("fingerprint") == want_fp:
         return _store
 
-    _store = _build_incremental(src, want_fp, force)
-    return _store
+    # Serialise rebuilds. Without this, concurrent cold requests would each
+    # re-embed the whole corpus instead of one build serving all of them.
+    with _LOCK:
+        if not force and _store is not None and _store.meta.get("fingerprint") == want_fp:
+            return _store
+        _store = _build_incremental(src, want_fp, force)
+        return _store
 
 
 def _build_incremental(src, want_fp: str, force: bool) -> VectorStore:

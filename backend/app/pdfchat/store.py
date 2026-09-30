@@ -1,16 +1,14 @@
-"""Tiny in-memory vector store with a JSON disk cache.
+"""Tiny in-memory vector store.
 
-No external vector DB — the prototype corpus is small, so cosine over a plain list
-is fast enough and dependency-free. The index (chunks + embeddings) is cached to
-disk keyed by the corpus fingerprint + embedding model, so we only re-embed when
-the PDFs or the model change.
+No external vector DB — the prototype corpus is small, so cosine over a plain
+list is fast enough and dependency-free. Persistence lives in service.py, which
+caches per PDF (keyed by each file's fingerprint plus the embedding model) so
+adding or changing one document only re-embeds that document.
 """
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 
@@ -40,23 +38,3 @@ class VectorStore:
         ]
         scored.sort(key=lambda t: t[1], reverse=True)
         return scored[:k]
-
-    # ---- persistence ----
-    def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"meta": self.meta, "chunks": self.chunks, "embeddings": self.embeddings}
-        path.write_text(json.dumps(payload), encoding="utf-8")
-
-    @classmethod
-    def load(cls, path: Path) -> "VectorStore | None":
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return cls(
-                chunks=data.get("chunks", []),
-                embeddings=data.get("embeddings", []),
-                meta=data.get("meta", {}),
-            )
-        except Exception:  # noqa: BLE001 - a corrupt cache should just trigger a rebuild
-            return None

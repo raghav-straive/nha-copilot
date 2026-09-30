@@ -16,10 +16,13 @@ sensitive table) is likewise restricted below senior_analyst.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 
 import sqlglot
 from sqlglot import exp
+
+logger = logging.getLogger(__name__)
 
 # Human-readable columns that list an INDIVIDUAL FACILITY (name/address). In the
 # ABDM dataset these are public dashboard data, so this is a granularity tier, not
@@ -47,7 +50,7 @@ class RbacResult:
     allowed: bool
     reason: str | None = None
     # columns that triggered the block, for logging/UX
-    blocked_columns: list[str] = None  # type: ignore[assignment]
+    blocked_columns: list[str] = field(default_factory=list)
 
 
 def check_rbac(sql: str, role: str) -> RbacResult:
@@ -57,8 +60,19 @@ def check_rbac(sql: str, role: str) -> RbacResult:
 
     try:
         stmt = sqlglot.parse_one(sql, read="bigquery")
-    except Exception:  # noqa: BLE001 - validator already ran; be permissive here
-        return RbacResult(allowed=True)
+    except Exception:  # noqa: BLE001
+        # Fail CLOSED. This is a security control, and it must not depend on the
+        # validator having run: that parses with sqlglot.parse() while this uses
+        # parse_one(), so the two can legitimately disagree. An unparseable
+        # query must never execute on a non-admin's behalf.
+        logger.warning("RBAC could not parse SQL; denying")
+        return RbacResult(
+            allowed=False,
+            reason=(
+                "I couldn't verify that query against your access level. "
+                "Please rephrase."
+            ),
+        )
 
     referenced = {c.name.lower() for c in stmt.find_all(exp.Column) if c.name}
 
