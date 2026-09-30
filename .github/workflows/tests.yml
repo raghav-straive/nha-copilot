@@ -1,0 +1,61 @@
+name: Tests
+
+# The only existing workflow builds and deploys the frontend, so neither the
+# backend's tests nor the frontend's ran anywhere on push — tests that never run
+# in CI stop being trusted, and then stop being true. This runs both.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: pytest
+        env:
+          # The app refuses to start with the default JWT_SECRET and the seed
+          # accounts (see issues.md #4); CI has no real credentials.
+          ALLOW_INSECURE_DEV: "1"
+          # A Secure cookie cannot be stored over plain http in the test client.
+          COOKIE_SECURE: "false"
+        run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Typecheck and build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Audit production dependencies
+        # Advisory only: fails loudly in the log without blocking a merge on a
+        # transitive dev-tool advisory. Tighten to --audit-level=high once the
+        # remaining findings are cleared.
+        run: npm audit --omit=dev || true

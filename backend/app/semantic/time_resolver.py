@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 # ABDM prototype data window (broadest span across all tables; scan_pay_count
 # reaches back to 2024-07-26, the rest start 2026-01-01, all end ~2026-07-10).
@@ -31,9 +31,30 @@ class TimeResolution:
     note: str | None = None
 
 
+# An explicit ISO date. Matched (and consumed) before the financial-year
+# patterns, because "2026-03-15" otherwise looks like "FY2026-..." — see
+# _ISO_RANGE_RE below and the FY guard in resolve().
+_ISO = r"(20\d{2})-(\d{2})-(\d{2})"
+_ISO_RANGE_RE = re.compile(
+    _ISO + r"\s*(?:to|and|till|until|through|upto|up to|–|—|-|\.\.)\s*" + _ISO
+)
+_ISO_ONE_RE = re.compile(_ISO)
+
+# A real quarter reference: the word itself, or q1..q4. NOT a bare "q", which
+# appears in ordinary words (unique, query, frequency, quantity, equal).
+_QUARTER_HINT_RE = re.compile(r"\bquarter\b|\bq\s*[1-4]\b")
+
+
 def _fy_range(fy_start_year: int) -> tuple[date, date]:
     """Indian financial year: 1 Apr Y -> 1 Apr Y+1 (exclusive)."""
     return date(fy_start_year, 4, 1), date(fy_start_year + 1, 4, 1)
+
+
+def _as_date(y: str, m: str, d: str) -> date | None:
+    try:
+        return date(int(y), int(m), int(d))
+    except ValueError:
+        return None  # e.g. 2025-13-45
 
 
 def _quarter_range(fy_start_year: int, q: int) -> tuple[date, date]:
@@ -58,6 +79,31 @@ class TimeResolver:
         today = today or date.today()
         t = text.lower()
 
+        # ---- explicit ISO dates first ----
+        # These must be checked before the financial-year patterns: the FY regex
+        # would otherwise read "2026-03-15" as FY2026-27 (Apr 2026 - Apr 2027),
+        # a range that does not even contain the date the user asked about.
+
+        # A date range: "between 2025-04-01 and 2025-06-30".
+        m = _ISO_RANGE_RE.search(t)
+        if m:
+            start = _as_date(m.group(1), m.group(2), m.group(3))
+            last = _as_date(m.group(4), m.group(5), m.group(6))
+            if start and last and last >= start:
+                # The user means an inclusive range; our `end` is exclusive.
+                return self._finalize(
+                    start,
+                    last + timedelta(days=1),
+                    f"{start.isoformat()} to {last.isoformat()}",
+                )
+
+        # A single date: "ABHA created on 2026-03-15" -> just that day.
+        m = _ISO_ONE_RE.search(t)
+        if m:
+            day = _as_date(m.group(1), m.group(2), m.group(3))
+            if day:
+                return self._finalize(day, day + timedelta(days=1), day.isoformat())
+
         # Q2 2023-24 / Q2 FY2023-24 / quarter 2 2023-24
         m = re.search(r"q(?:uarter)?\s*([1-4]).*?(20\d{2})\s*[-/]\s*(\d{2,4})", t)
         if m:
@@ -66,16 +112,23 @@ class TimeResolver:
             start, end = _quarter_range(fy_start, q)
             return self._finalize(start, end, f"Q{q} {fy_start}-{str(fy_start + 1)[-2:]}")
 
-        # FY2023-24 / 2023-24 / financial year 2023-24
-        m = re.search(r"(?:fy\s*)?(20\d{2})\s*[-/]\s*(\d{2,4})", t)
+        # FY2023-24 / 2023-24 / financial year 2023-24.
+        # The trailing guard rejects a third date component, so a stray ISO date
+        # that slipped past the checks above is not read as a financial year.
+        m = re.search(r"(?:fy\s*)?(20\d{2})\s*[-/]\s*(\d{2,4})(?!\s*[-/]?\s*\d)", t)
         if m:
             fy_start = int(m.group(1))
             start, end = _fy_range(fy_start)
             return self._finalize(start, end, f"FY{fy_start}-{str(fy_start + 1)[-2:]}")
 
-        # single calendar year, e.g. "in 2025"
+        # Single calendar year, e.g. "in 2025".
+        # Skipped when the question really is about a quarter, so "Q2 2025" is
+        # not flattened into the whole of 2025. The check looks for the word
+        # "quarter" or q1..q4 — NOT a bare "q", which previously matched the
+        # letter inside ordinary words (unique, query, frequency, quantity) and
+        # silently dropped the year from the resolved context.
         m = re.search(r"\b(20\d{2})\b", t)
-        if m and "quarter" not in t and "q" not in t:
+        if m and not _QUARTER_HINT_RE.search(t):
             y = int(m.group(1))
             return self._finalize(date(y, 1, 1), date(y + 1, 1, 1), str(y))
 

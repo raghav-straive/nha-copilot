@@ -35,8 +35,9 @@ how fast the app is and how much it costs to run. Bugs and security findings liv
 | 13 | **Load the charting library on demand** | **initial download 185 KB → 60 KB** | ✅ Done |
 | 14 | Store embeddings in binary rather than text | ~10× smaller cache | ⬜ Available |
 | 15 | Use the "dry run" for better error messages | Clearer failures | ⬜ Available |
-| 16 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
-| 17 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
+| 16 | **Upgrade the build toolchain** | **build 6.2 s → 1.0 s, bundle 2% smaller** | ✅ Done |
+| 17 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
+| 18 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
 
 **Measured, not assumed.** Items 7, 8, 13 and 16 came from actually timing or
 building things — including #16, which looked worthwhile until measurement showed it
@@ -293,9 +294,27 @@ jump.
 
 ---
 
+## 16. Upgrade the build toolchain ✅
+
+Primarily a security fix (Issue 29 in [`issues.md`](issues.md) — it cleared the
+critical advisory), but it came with a free speed win. Upgrading `vite` 6 → 8,
+`vitest` 2 → 5 and `@vitejs/plugin-react` 4 → 6:
+
+| | Before | After |
+|---|---|---|
+| Production build | 6.2 s | **1.0 s** |
+| Initial download | 60.13 KB gzipped | **58.92 KB gzipped** |
+| Test run | 829 ms | 378 ms |
+
+Verified after upgrading: build succeeds, typecheck passes, all 36 tests pass.
+A faster build matters more than it looks — it's the loop every future change
+runs through.
+
+---
+
 # Rejected
 
-## 16. Caching the geography workbook parse ❌ *(ruled out by measurement)*
+## 17. Caching the geography workbook parse ❌ *(ruled out by measurement)*
 
 **The idea.** Place-name resolution loads a spreadsheet of states, districts,
 aliases and district splits at every startup. Parsing a spreadsheet sounds slow, so
@@ -333,7 +352,8 @@ at all. That costs nothing per request and carries no risk.
 
 | Change | Before | After |
 |---|---|---|
-| **Initial page download** | 185.31 KB gzipped | **60.13 KB gzipped — measured, 68% smaller** |
+| **Initial page download** | 185.31 KB gzipped | **58.92 KB gzipped — measured, 68% smaller** |
+| **Production build time** | 6.2 s | **1.0 s** (toolchain upgrade) |
 | **Response size** (500-row result) | 59 KB | **7 KB — measured, 89% smaller** |
 | **Startup schema load** | 9 sequential queries, ~10–20 s | **1 query** |
 | **Weekly report load** | ~20–40 s (20 queries in sequence) | A few seconds (concurrent) |

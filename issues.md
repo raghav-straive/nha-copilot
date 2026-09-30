@@ -53,13 +53,19 @@ For speed and cost improvements, see [`optimizations.md`](optimizations.md).
 | 23 | Test dependencies missing from the manifest | P2 | ✅ Fixed |
 | 24 | The JWT library is unmaintained | P2 | ✅ Fixed |
 | 25 | Login token readable by injected scripts | P2 | ✅ Fixed |
+| 26 | **A letter "q" anywhere in a question silently dropped the year** | **P1** | ✅ Fixed |
+| 27 | **An explicit date was misread as a financial year** | **P1** | ✅ Fixed |
+| 28 | Tests never ran in CI | P2 | ✅ Fixed |
+| 29 | 14 dependency vulnerabilities, 1 critical | P2 | ✅ Fixed (10 of 14) |
+| 30 | Replacing a PDF served a stale page image | P2 | ✅ Fixed |
 
-**Tests: 25 → 151 backend + 36 frontend.** Every issue marked fixed has a test,
+**Tests: 25 → 170 backend + 36 frontend.** Every issue marked fixed has a test,
 except the deployment-configuration ones (1, 6) which have no local equivalent.
 
-**Nothing is left open.** The last three — the unmaintained token library, the
-token being readable by page scripts, and the frontend not renewing sessions —
-are all now closed. See #24, #25 and #20.
+**Nothing is left open.** Issues 26–30 came from a later sweep once both
+toolchains were available; #26 and #27 are the most consequential findings in this
+whole document after #2, because both produced **silently wrong date ranges** in a
+tool whose entire value is trust in its numbers.
 
 ---
 
@@ -619,6 +625,147 @@ plain `http://localhost` during development.
 storage — that's a browser constraint, not a shortcut. The difference is that the
 secure path is now the default wherever it's possible, and the fallback is a
 deliberate, documented exception rather than the only behaviour.
+
+---
+
+---
+
+# A later sweep — issues 26 to 30
+
+Found after Python and Node were both available, so all five were reproduced by
+running code rather than reading it.
+
+## Issue 26 — A letter "q" anywhere in a question silently dropped the year
+
+🧪 Reproduced · ✅ **Fixed** · **This is a P1, and it was hiding in plain sight**
+
+**What's wrong.** Before treating a bare year like "2026" as a date range, the
+resolver checked whether the question was really about a quarter. That check asked
+whether the text contained `"quarter"` — or the letter **`"q"`**.
+
+The letter `q` appears in ordinary words. **`uniq`ue. `q`uery. fre`q`uency.
+`q`uantity. e`q`ual.**
+
+**What it caused — reproduced against the real code:**
+
+| Question | Year resolved? |
+|---|---|
+| "How many facilities were registered in 2026?" | ✅ 2026 |
+| "How many **uniq**ue facilities were registered in 2026?" | ❌ **dropped** |
+| "Show me the fre**q**uency of ABHA creation in 2026" | ❌ **dropped** |
+| "Run a **q**uery for facilities in 2026" | ❌ **dropped** |
+| "What **q**uantity of records were linked in 2026?" | ❌ **dropped** |
+
+Five of seven realistic questions lost their year. And "unique" is not an unusual
+word here — `COUNT(DISTINCT ...)` is the house style for counting facilities, so
+"how many unique facilities…" is exactly how someone would phrase it.
+
+When the year is dropped, the resolved-context block handed to the model omits the
+period entirely — even though the prompt tells the model to *use those values
+directly* — and the period chip disappears from the UI. The model may recover from
+the raw question, or may answer over all time and present it as the year's figure.
+
+**What was done.** The check now looks for the actual word "quarter" or `q1`–`q4`,
+not a bare letter. Six parametrised tests cover the words that used to break it,
+plus one asserting a real quarter reference still wins over a bare year.
+
+---
+
+## Issue 27 — An explicit date was misread as a financial year
+
+🧪 Reproduced · ✅ **Fixed**
+
+**What's wrong.** The financial-year pattern matched *inside* an ISO date. Indian
+financial years are written `2025-26`, and `2026-03-15` starts with the same shape.
+
+**What it caused — reproduced:**
+
+| Question | Resolved period | Correct? |
+|---|---|---|
+| "ABHA created on **2026-03-15**" | FY2026-27 → Apr 2026 – Apr 2027 | ❌ **doesn't even contain 15 March 2026** |
+| "…between **2026-04-01 and 2026-06-30**" | FY2025-26 → the whole year | ❌ far broader than asked |
+
+The first is the worse one: the resolved range *excludes the very date asked
+about*, and it is injected into the prompt and shown to the user as a confident
+chip. A user asking about one day could be shown a full-year total.
+
+**What was done.** Explicit dates are now recognised **first**, before the
+financial-year patterns, and resolve to exactly what was asked:
+
+- a single date → that one day (end-exclusive, so the next day)
+- a range → precisely that range, inclusive of the end date the user named
+  (`…and 2026-06-30` → up to but not including 1 July)
+
+Six joiners are supported (`to`, `and`, `till`, `until`, `through`, `-`), an
+impossible date like `2026-13-45` falls through instead of raising, and a reversed
+range is ignored rather than producing `start > end`. The financial-year pattern
+also gained a guard so it can't match a third date component. `2025-26` still
+resolves as a financial year — there's a test for that too.
+
+---
+
+## Issue 28 — Tests never ran in CI
+
+✅ **Fixed**
+
+**What's wrong.** The only workflow built and deployed the frontend. **No job ran
+the backend's tests**, and the frontend job ran `npm run build` but never `npm
+test`.
+
+**What it caused.** 170 backend tests and 36 frontend tests that existed but were
+never enforced. Tests that don't run in CI stop being trusted, and then stop being
+true.
+
+**What was done.** A `Tests` workflow runs both suites on every push and pull
+request, with the two environment flags the backend tests need. It also runs an
+advisory production-dependency audit.
+
+---
+
+## Issue 29 — 14 dependency vulnerabilities, one critical
+
+🧪 Reproduced (`npm audit`) · ✅ **10 of 14 fixed; the other 4 are unreachable here**
+
+**What's wrong.** The frontend had **14 known vulnerabilities: 1 critical, 7 high,
+6 moderate.** Nothing had ever scanned for them.
+
+**What was done.** Non-breaking fixes applied, then the dev toolchain upgraded
+(`vite` 6 → 8, `vitest` 2 → 5, `@vitejs/plugin-react` 4 → 6). Verified after: build
+succeeds, typecheck passes, all 36 tests pass.
+
+**14 → 4. Critical: 1 → 0. High: 7 → 2.** The build also got *faster* (6.2 s →
+1.0 s) and slightly *smaller* (60.13 → 58.92 KB gzipped).
+
+**The remaining 4, and why downgrading would be worse:**
+
+| Package | Advisory | Why it isn't reachable |
+|---|---|---|
+| `image-size` (high, via `pptxgenjs`) | Denial of service via infinite loops in the **JXL, HEIF and ICNS image parsers** | The app passes **no images** to pptxgenjs — exports are native chart objects and text, verified by search. Those parsers are never invoked. The only offered "fix" is pptxgenjs@4.0.0, a *downgrade* from the installed 4.0.1, which is also the latest published version — so no forward fix exists |
+| `uuid` (moderate, via `exceljs`) | Missing buffer bounds check **when `buf` is provided** | exceljs never passes `buf`. The only fix is downgrading exceljs 4 → 3, which would break the Excel export — a real feature users rely on |
+
+Both also run **client-side, in the user's own browser, on their own data** — there
+is no attacker-supplied input path. Documented rather than "fixed" by breaking two
+export features.
+
+---
+
+## Issue 30 — Replacing a PDF served a stale page image
+
+📖 Read from code · ✅ **Fixed**
+
+**What's wrong.** Rendered page images were cached on `(document id, page, dpi)`.
+For the local folder source the id is derived from the filename, so replacing a PDF
+with an updated version of the same name reuses the id — and the cache kept serving
+the **old** image.
+
+**What it caused.** The search index *does* invalidate by file fingerprint, so after
+a replacement the citation boxes are recomputed from the new text while the page
+picture is still the old one. The highlight then sits over unrelated words — the
+feature's one job is pointing at the right line, so this quietly undermines exactly
+what it's for. Narrow (needs a live replacement) but wrong when it happens.
+
+**What was done.** The file's fingerprint is now part of the cache key, so the
+renderer invalidates on the same signal the index already uses.
 
 ---
 

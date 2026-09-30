@@ -15,9 +15,31 @@ from app.pdfchat.source import get_pdf_source
 DISPLAY_DPI = 150  # crisp enough to read; boxes are fractional so DPI is free to choose
 
 
-@functools.lru_cache(maxsize=64)
 def render_page_png(pdf_id: str, page: int, dpi: int = DISPLAY_DPI) -> bytes:
-    """Render a 1-based page to PNG bytes. Cached (last 64 pages)."""
+    """Render a 1-based page to PNG bytes. Cached (last 64 pages).
+
+    The cache key includes the source file's fingerprint. Without it, replacing
+    a PDF while the server is running would keep serving the OLD page image
+    while the citation boxes had been recomputed from the NEW text — so the
+    highlight would sit over unrelated words. The index already invalidates by
+    fingerprint; this makes the renderer agree with it.
+    """
+    return _render_cached(pdf_id, page, dpi, _fingerprint_of(pdf_id))
+
+
+def _fingerprint_of(pdf_id: str) -> str:
+    """Whatever the source reports as this document's version."""
+    try:
+        for ref in get_pdf_source().list_pdfs():
+            if ref.id == pdf_id:
+                return ref.fingerprint
+    except Exception:  # noqa: BLE001 - source unreachable: fall back to a stable key
+        pass
+    return ""
+
+
+@functools.lru_cache(maxsize=64)
+def _render_cached(pdf_id: str, page: int, dpi: int, _fingerprint: str) -> bytes:
     import pypdfium2 as pdfium
 
     path = get_pdf_source().get_local_path(pdf_id)
