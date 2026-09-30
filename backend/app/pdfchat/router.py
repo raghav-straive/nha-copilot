@@ -1,4 +1,6 @@
 """Chat-with-PDFs endpoints: document list, cited answer, raw PDF, reindex."""
+import logging
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -6,7 +8,10 @@ from app.auth.jwt import CurrentUser, get_current_user
 from app.pdfchat import service
 from app.pdfchat.render import render_page_png
 from app.pdfchat.source import get_pdf_source
+from app.query_log.logger import log_query
 from app.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pdfchat", tags=["pdfchat"])
 
@@ -27,7 +32,29 @@ def message(
     body: PdfChatRequest = Body(...),
     user: CurrentUser = Depends(get_current_user),
 ):
-    return service.answer(body.message)
+    result = service.answer(body.message)
+    # PDF chat previously bypassed the audit trail entirely. It generates no
+    # SQL, so generated_sql stays null; what matters here is who asked what and
+    # which documents were cited.
+    try:
+        cites = result.get("citations") or []
+        log_query(
+            session_id=f"pdfchat:{user.username}",
+            user_id=user.username,
+            user_role=user.role,
+            original_question=body.message,
+            resolved_geography=None,
+            resolved_period=None,
+            generated_sql=None,
+            execution_status="success" if result.get("found") else "not_found",
+            error_message=None,
+            row_count=len(cites),
+            response_shown=result.get("answer"),
+            source="pdfchat",
+        )
+    except Exception:  # noqa: BLE001 - logging must never break an answer
+        logger.warning("PDF chat query log failed", exc_info=True)
+    return result
 
 
 @router.get("/file/{pdf_id}")

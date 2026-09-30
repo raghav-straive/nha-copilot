@@ -36,18 +36,30 @@ For speed and cost improvements, see [`optimizations.md`](optimizations.md).
 | 6 | The rate limit is shared by everyone, not per user | P1 | ✅ Fixed |
 | 7 | The weekly report has no limit and is expensive | P1 | ✅ Fixed |
 | 8 | Simultaneous first-time users each pay full price | P1 | ✅ Fixed |
-| 9 | Explorer and PDF chat don't reach the audit log | P1 | ✅ Fixed (Explorer) |
+| 9 | Explorer and PDF chat don't reach the audit log | P1 | ✅ Fixed |
 | 10 | Database connections are never closed | P1 | ✅ Fixed |
 | 11 | Nothing caps how many rows come back | P1 | ✅ Fixed |
 | 12 | "Today" is the server's date, not India's | P1 | ✅ Fixed |
 | 13 | Dependencies don't install on the newest Python | P2 | ✅ Fixed |
-| 14 | The architecture doc describes a system that no longer exists | P2 | ⬜ Open |
+| 14 | The architecture doc describes a system that no longer exists | P2 | ✅ Fixed |
 | 15 | Dead code | P2 | ✅ Fixed |
 | 16 | The PDF cache can be corrupted by a crash | P2 | ✅ Fixed |
-| 17 | Test coverage stops at the oldest modules | P2 | ⬜ Partly |
-| 18 | Six smaller items | P2 | Mixed |
+| 17 | Test coverage stops at the oldest modules | P2 | ✅ Fixed |
+| 18 | Deprecated app-startup mechanism | P2 | ✅ Fixed |
+| 19 | Password truncation could merge two passwords | P2 | ✅ Fixed |
+| 20 | Login tokens expire with no way to renew | P2 | ✅ Fixed (backend) |
+| 21 | Unbounded audit-log query | P2 | ✅ Fixed |
+| 22 | Health check reported "ok" regardless | P2 | ✅ Fixed |
+| 23 | Test dependencies missing from the manifest | P2 | ✅ Fixed |
+| 24 | The JWT library is unmaintained | P2 | ⬜ Open |
+| 25 | Login token readable by injected scripts | P2 | ⬜ Accepted |
 
-**Tests: 25 → 54.** Every security finding above is now covered by a test.
+**Tests: 25 → 140.** Every issue marked fixed above has a test, except the
+deployment-configuration ones (1, 6) which have no local equivalent.
+
+**Three items remain open**, all by choice: #24 needs a library swap, #25 needs an
+architectural change, and the frontend half of #20 needs Node, which wasn't
+available in the environment this work was done in.
 
 ---
 
@@ -72,9 +84,18 @@ file, with a 7-day expiry and a cap on stored history. Two workers is now safe.
 Tests cover a session written by one store instance and read back by another,
 which stands in for "a second worker handles the next turn".
 
-> **Still slightly imperfect:** the Explorer cache and the PDF index are *still*
-> built once per process. That's duplicated work on a cold start, not wrong
-> behaviour, and it's noted in a comment in the deployment file.
+The Explorer cache also now persists to disk, so a second worker (or a restart)
+reuses the cards instead of regenerating them.
+
+> ### A correction to an earlier version of this document
+> An earlier draft said the Explorer cache *and* the PDF index were both
+> regenerated per worker, "doubling that spend". I checked, and that was too
+> strong for the PDF index: its cache is on disk and keyed per document, so a
+> second worker re-reads and re-parses the cache file but **does not re-embed
+> anything**. The cost there is a little CPU, not AI calls.
+>
+> The Explorer was the real problem — it had no disk cache at all, so each
+> worker genuinely paid full price in AI calls. That is what's now fixed.
 
 ---
 
@@ -266,12 +287,20 @@ invisible to review — and Explorer's SQL is exactly the adventurous, join-heav
 most worth reviewing. Failed Explorer queries, the most informative ones of all,
 vanished silently.
 
-**What was done.** Explorer now logs every question it runs, deliberately **before**
-the success filter so failures are captured too. Logging is wrapped so it can never
-break generation.
+**What was done.** Both now log. Explorer logs every question it runs, deliberately
+**before** the success filter so failures are captured too. PDF chat logs the
+question, the answer and how many documents were cited (it generates no SQL, so
+that field stays empty).
 
-⬜ **Still open:** PDF chat questions are still unlogged, and log rows don't yet carry
-a column saying which feature produced them. Both are small additions.
+The log also gained a **`source`** column — `chat`, `explorer`, `pdfchat` or
+`report` — so the audit trail can tell a user's own question from one the Explorer
+invented, and `/query-log?source=explorer` filters to just those. Databases created
+before the column existed are migrated automatically on startup, with existing rows
+defaulting to `chat`; there's a test that builds an old-format database and checks
+the migration.
+
+Logging is wrapped everywhere so it can never break an answer — there's a test for
+that too.
 
 ---
 
@@ -363,17 +392,25 @@ the full dependency list now installs cleanly.
 
 ## Issue 14 — The architecture doc describes a system that no longer exists
 
-⬜ **Open — deliberately left alone**
+✅ **Fixed**
 
-`docs/architecture.md` carries a clear "SUPERSEDED" banner, which is good. But it's
-still 700 lines describing a different database, different tables, and clinical codes
-that are no longer part of this project. A newcomer — or an AI assistant pointed at
-the repo — will absorb the wrong data model.
+**What's wrong.** `docs/architecture.md` carried a clear "SUPERSEDED" banner, which
+was good. But it was still 700 lines describing a different database, different
+tables, and clinical codes that are no longer part of this project.
 
-**Why it's still open.** Trimming it means deciding which design reasoning is worth
-keeping, which is an editorial judgement rather than a mechanical fix. The suggestion
-is to keep the design-principles and "why free-form SQL" sections and move the rest to
-a `history` folder.
+**What it caused.** A newcomer — or an AI assistant pointed at the repo — would
+absorb the wrong data model. A banner is easy to scroll past.
+
+**What was done.** The file moved to
+`docs/history/architecture-pmjay-superseded.md`, and a new `docs/README.md` maps the
+documentation: authoritative documents first, then a "do not use as a reference"
+section explaining exactly what in the old document is stale and which two sections
+are still worth reading for design rationale.
+
+**Why moving rather than trimming.** Deleting content means judging which design
+reasoning is worth keeping, and that's the author's call, not a reviewer's. Moving it
+under `history/` makes the status *structural* — you can't miss it — without
+destroying anything. The file's git history is preserved through the move.
 
 ---
 
@@ -408,54 +445,160 @@ is an atomic swap. A crash now leaves the previous good copy intact.
 
 ## Issue 17 — Test coverage stops at the oldest modules
 
-⬜ **Partly addressed**
+✅ **Fixed**
 
-The suite originally covered the validator, the role check, the geography layer, and
-the pipeline; the frontend covered the chart engine. **Nothing covered the weekly
-report, the Explorer, or any of the PDF chat** — where the newest and most expensive
-logic lives.
+**What's wrong.** The suite originally covered the validator, the role check, the
+geography layer, and the pipeline; the frontend covered the chart engine. **Nothing
+covered the weekly report, the Explorer, or any of the PDF chat** — where the newest
+and most expensive logic lives.
 
-Worth sitting with: **a three-line test asserting that a `SELECT *` query is denied to
-a viewer would have caught Issue 2**, the most serious finding in this review.
+Worth sitting with: **a three-line test asserting that a `SELECT *` query is denied
+to a viewer would have caught Issue 2**, the most serious finding in this review.
 
-**What was done.** Tests went from 25 to 54, covering every security finding: star
-projections (including subquery, multi-part and qualified forms), `COUNT(*)`
-regression guards, the row cap, the role check failing closed, and session ownership
-and persistence.
+**What was done.** Tests went from **25 to 140**:
 
-⬜ **Still open:** the weekly report, the Explorer, and PDF chat remain untested. The
-highest-value additions would be the citation-renumbering logic in PDF chat and the
-number-formatting helpers in the weekly report.
+| Area | What's covered |
+|---|---|
+| SQL safety | Star projections (plain, qualified, multi-part, through a CTE), `COUNT(*)` regression guards, the row cap across every query shape |
+| Access control | Role tiers, failing closed on unparseable SQL, star-vs-validator interaction |
+| Sessions | Ownership on resume, the owner's session surviving, persistence across store instances, history cap |
+| Weekly report | Number/date helpers, end-date exclusivity, concurrent fetch, one failing query not sinking the report, the district-master fan-out guard |
+| Explorer | Caching, force-refresh, per-role separation, disk cache reuse by a fresh process, stale and corrupt cache handling, logging of failures, a broken logger not breaking the build |
+| PDF chat | Search ranking, `k` handling, zero vectors, the fast and slow search paths agreeing, citation renumbering (order of appearance, out-of-range dropped, mapping back to the right page), graceful degradation |
+| Repeated-question cache | Role in the key, resolved period in the key, expiry, LRU eviction |
+| Auth | Long/multibyte/emoji passwords, distinct salts, malformed account config, token round-trip, forged-token rejection |
+| Query log | The `source` column, migration of an old-format database, filter, limit clamp |
+| HTTP layer | Login, refresh, auth required, admin-only endpoints, cross-user session 404, date validation, compression on and off |
+
+All 140 run offline in about 30 seconds — no cloud credentials, no AI calls.
 
 ---
 
-## Issue 18 — Smaller items
+## Issue 18 — Deprecated app-startup mechanism
 
-| Item | Where | Status |
-|---|---|---|
-| Unbounded log query — asking for a huge number of log rows scanned the whole table | `query_log/router.py` | ✅ Fixed (clamped) |
-| Shallow health check — reported "ok" without checking anything, so a monitor showed green while every query failed | `main.py` | ✅ Fixed (now reports what actually loaded) |
-| Deprecated startup style — the app-startup mechanism used here is deprecated in the current web framework | `main.py:51` | ⬜ Open — works today, will need migrating |
-| Password truncation — passwords are cut at 72 bytes, which can slice a multi-byte character in half | `auth/users.py:22` | ⬜ Open — harmless today, latent oddity |
-| Login token in browser storage — readable by any injected script | `frontend/src/App.tsx:14` | ⬜ Open — acceptable prototype trade-off, worth stating in the security notes |
-| 8-hour token with no renewal — a long analyst session dies mid-work | `config.py:57` | ⬜ Open — needs a refresh mechanism, which is a feature not a fix |
+✅ **Fixed**
+
+The startup hook style used here is deprecated in the current web framework and
+would eventually stop working. Migrated to the supported mechanism, which also puts
+startup and shutdown in one place. Covered indirectly by the HTTP tests, which boot
+the real app.
+
+---
+
+## Issue 19 — Password truncation could merge two different passwords
+
+✅ **Fixed**
+
+**What's wrong.** Passwords were cut to their first 72 bytes before hashing (the
+hashing algorithm ignores anything beyond that). Two problems: cutting raw UTF-8 at a
+byte boundary can slice a multi-byte character in half, and any two passwords sharing
+a 72-byte prefix collapsed into **the same credential**.
+
+**What it caused.** With a long passphrase, a wrong password could be accepted. Only
+reachable with passwords over 72 bytes, so unlikely in practice — but it's a silent
+authentication weakness.
+
+**What was done.** The password is now condensed with SHA-256 and base64-encoded
+before hashing, which is the standard fix: every character contributes, the result is
+always within the limit, and no byte-slicing occurs. Tests cover a 73rd-byte
+difference, long Hindi text, and emoji.
+
+---
+
+## Issue 20 — Login tokens expired with no way to renew
+
+✅ **Fixed (backend)** · ⬜ **Frontend wiring open**
+
+**What's wrong.** Tokens last 8 hours and there was no renewal path, so a long
+analyst session simply died mid-work.
+
+**What was done.** A `POST /auth/refresh` endpoint exchanges a still-valid token for
+a fresh one. It deliberately re-reads the role from the user store rather than
+copying it from the old token, so a role change — or a removed account — takes effect
+at the next refresh instead of persisting until expiry. Tested including the forged-
+and missing-token cases.
+
+⬜ **Still open:** the frontend doesn't call it yet. That needs Node to build and
+type-check, which wasn't available in the environment this work was done in, and
+shipping unverified TypeScript seemed worse than leaving a documented gap.
+
+---
+
+## Issue 21 — Unbounded audit-log query
+
+✅ **Fixed.** Asking for a huge number of log rows scanned the whole table. Now
+clamped, with an index on the timestamp column the log is always sorted by.
+
+---
+
+## Issue 22 — Health check reported "ok" regardless
+
+✅ **Fixed.** It returned "ok" unconditionally, so a monitor showed green while every
+query failed on expired credentials. Startup already knew whether the geography data
+and the live schema had loaded — it just threw that away. It now reports both plus
+whether an AI key is configured, and says `degraded` rather than `ok` when something
+is missing. No extra cloud calls per health poll.
+
+---
+
+## Issue 23 — Test dependencies missing from the manifest
+
+✅ **Fixed**
+
+`pytest` was not in `requirements.txt` at all, so the documented test command only
+worked if you happened to have it installed globally — and the HTTP tests need
+`httpx` as well. Added `requirements-dev.txt` (which includes the main manifest), and
+the README now shows the install step and the `ALLOW_INSECURE_DEV=1` flag the tests
+need.
+
+---
+
+## Issue 24 — The JWT library is unmaintained
+
+⬜ **Open**
+
+🧪 Reproduced (as a deprecation warning during the test run)
+
+**What's wrong.** The project uses `python-jose` 3.3.0 for login tokens. It has had
+no release in years, and it calls a date function that Python has deprecated and
+scheduled for removal.
+
+**What it causes.** Nothing today — it's a warning. But it will become an error on a
+future Python, and an unmaintained authentication library gets no security fixes.
+
+**Why it's still open.** Swapping to the maintained alternative (`PyJWT`) is a small
+change — encode/decode and one exception type — but it touches the authentication
+path, and it deserves its own change with its own review rather than being bundled
+into a batch of unrelated fixes.
+
+---
+
+## Issue 25 — Login token readable by injected scripts
+
+⬜ **Accepted, not fixed**
+
+**What's wrong.** The login token is kept in browser session storage, which any
+script running on the page can read.
+
+**Why it's not fixed.** The robust answer is to stop giving the browser a readable
+token at all and use an HTTP-only cookie instead. That's not a fix — it's an
+architectural change touching the login flow, cross-origin configuration,
+cross-site-request protection, and every frontend call. It should be a deliberate
+decision, not a side effect of a cleanup pass.
+
+**Meanwhile:** it's a normal trade-off for a prototype and it's recorded here so the
+decision is explicit rather than accidental.
 
 ---
 
 # What remains open
 
-Nothing here is urgent; all are judgement calls or additions rather than defects.
-
 | # | Item | Why it's still open |
 |---|---|---|
-| 14 | Trim the superseded architecture doc | Editorial call on what reasoning to keep |
-| 9 | Log PDF chat questions; tag log rows by feature | Small addition, needs a schema column |
-| 17 | Tests for report / Explorer / PDF chat | Worth doing, none of it is load-bearing for the security fixes |
-| 18 | Deprecated startup style | Works today; migrate when convenient |
-| 18 | Password byte truncation | Harmless in practice |
-| 18 | Login token storage | Accepted prototype trade-off |
-| 18 | Token renewal | A feature, not a fix |
-| — | Explorer / PDF caches still per-process | Duplicate cold-start cost, not incorrect |
+| 24 | Unmaintained JWT library | Touches the auth path; deserves its own reviewed change |
+| 25 | Login token in browser storage | Needs an architectural change, not a fix |
+| 20 | Frontend not calling the refresh endpoint | Needs Node to build and type-check; unavailable here |
+| — | Recharts loaded upfront in the frontend | Same reason — can't measure the bundle without Node |
 
 ---
 

@@ -9,7 +9,7 @@
 >
 > Companion docs: [`README.md`](README.md) (setup/usage),
 > [`backend/GOVERNANCE.md`](backend/GOVERNANCE.md) (authoritative data rules),
-> [`docs/architecture.md`](docs/architecture.md) (**superseded** — PM-JAY era).
+> [`docs/README.md`](docs/README.md) (documentation map).
 >
 > **Note:** Parts 2 and 3 below describe the issues and optimizations *as found*.
 > Most have since been fixed in this repository — `issues.md` and
@@ -497,11 +497,14 @@ script. The second is less work and less risk.
 
 ### Issue 14 — The architecture doc describes a system that no longer exists
 
-`docs/architecture.md` carries a clear "SUPERSEDED" banner, which is good — but it
-is still 700 lines describing PostgreSQL, PM-JAY claims tables, and clinical
+*(Since fixed — see `issues.md` #14.)*
+
+`docs/architecture.md` carried a clear "SUPERSEDED" banner, which was good — but it
+was still 700 lines describing PostgreSQL, PM-JAY claims tables, and clinical
 specialty codes, none of which are part of this project any more. A newcomer, or an
-AI assistant pointed at the repo, will absorb the wrong data model. Worth trimming
-to the design reasoning still worth keeping and moving it to a `history` folder.
+AI assistant pointed at the repo, would absorb the wrong data model. It now lives at
+`docs/history/architecture-pmjay-superseded.md`, with a documentation map at
+`docs/README.md` that states plainly which documents are authoritative.
 
 ### Issue 15 — Dead code ✅
 

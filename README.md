@@ -117,9 +117,17 @@ For a **production build** (self-hosting), copy `.env.example` to `.env`, set
 
 ## Tests
 ```bash
-cd backend  && ./.venv/Scripts/python.exe -m pytest -q     # safety, RBAC, semantic, pipeline
-cd frontend && npm test                                    # chart-decision engine
+# Test deps are in requirements-dev.txt (which includes requirements.txt):
+cd backend && ./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+ALLOW_INSECURE_DEV=1 ./.venv/Scripts/python.exe -m pytest -q   # 140 tests
+cd ../frontend && npm test                                     # chart-decision engine
 ```
+Backend coverage: SQL safety (incl. `SELECT *` rejection), RBAC, semantic layer,
+pipeline, session store, query log, repeated-question cache, auth/password
+hashing, weekly report, Explorer, PDF chat, and HTTP-level auth/compression.
+
+`ALLOW_INSECURE_DEV=1` is needed because the app refuses to start with the
+default `JWT_SECRET` and seed accounts — see [`issues.md`](issues.md) #4.
 A live eval harness (hits OpenAI + BigQuery) covers routing, coded values,
 joins, dates, geography, language mirroring, and numeric accuracy vs BigQuery:
 ```bash

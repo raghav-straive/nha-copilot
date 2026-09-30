@@ -7,6 +7,8 @@ Passwords are bcrypt-hashed at load; plaintext never persists.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 
 import bcrypt
@@ -18,13 +20,28 @@ logger = logging.getLogger(__name__)
 VALID_ROLES = {"viewer", "analyst", "senior_analyst", "admin"}
 
 
+def _prepare(pw: str) -> bytes:
+    """Reduce a password to a fixed 44-byte token for bcrypt.
+
+    bcrypt silently ignores anything past 72 bytes. Slicing the raw UTF-8 at
+    [:72] (the previous approach) can also cut a multi-byte character in half,
+    so two different passwords could collapse to the same truncated bytes. A
+    SHA-256 digest, base64-encoded, is the standard fix: every byte of the
+    password contributes, the result is always well inside bcrypt's limit, and
+    the base64 alphabet contains no NUL bytes (which bcrypt would treat as a
+    string terminator).
+    """
+    digest = hashlib.sha256(pw.encode("utf-8")).digest()
+    return base64.b64encode(digest)
+
+
 def _hash(pw: str) -> bytes:
-    return bcrypt.hashpw(pw.encode("utf-8")[:72], bcrypt.gensalt())
+    return bcrypt.hashpw(_prepare(pw), bcrypt.gensalt())
 
 
 def _verify(pw: str, hashed: bytes) -> bool:
     try:
-        return bcrypt.checkpw(pw.encode("utf-8")[:72], hashed)
+        return bcrypt.checkpw(_prepare(pw), hashed)
     except ValueError:
         return False
 

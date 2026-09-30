@@ -17,6 +17,9 @@ slowapi==0.1.9
 openpyxl==3.1.5
 pdfplumber==0.11.4
 python-multipart==0.0.20
+# Vectorised similarity search in pdfchat/store.py. Optional at runtime (the
+# store falls back to a pure-Python loop), but strongly recommended.
+numpy>=1.26
 # Chat-with-PDFs: OCR for scanned/image PDFs (Tesseract binary required separately)
 pypdfium2==4.30.0
 pytesseract==0.3.13

@@ -32,7 +32,12 @@ _TABLE_LABELS = {
 
 def load_schemas(force: bool = False) -> dict[str, list[tuple[str, str]]]:
     """Fetch (column, type) lists for every ABDM table. Cached. Safe to call
-    anytime; returns {} if BigQuery is unreachable (e.g. offline unit tests)."""
+    anytime; returns {} if BigQuery is unreachable (e.g. offline unit tests).
+
+    One query covering every table, not one query per table: this runs on the
+    startup path, and nine sequential round-trips at ~1-2s of job latency each
+    delayed readiness by 10-20s for data that arrives in a single scan.
+    """
     global _cache
     if _cache is not None and not force:
         return _cache
@@ -41,18 +46,33 @@ def load_schemas(force: bool = False) -> dict[str, list[tuple[str, str]]]:
 
     s = get_settings()
     bq = get_bigquery_client()
+    table_map = s.table_map
+    # table name -> our key. Two keys could in principle point at the same
+    # table, so map to a list.
+    key_by_table: dict[str, list[str]] = {}
+    for key, table in table_map.items():
+        key_by_table.setdefault(table, []).append(key)
+
+    names = ", ".join(f"'{t}'" for t in sorted(key_by_table))
+    sql = (
+        f"SELECT table_name, column_name, data_type "
+        f"FROM `{s.gcp_project}.{s.bq_dataset}`.INFORMATION_SCHEMA.COLUMNS "
+        f"WHERE table_name IN ({names}) "
+        f"ORDER BY table_name, ordinal_position"
+    )
+    res = bq.run_select(sql)
+    if not res.ok:
+        logger.warning("Schema fetch failed: %s", res.error)
+        return _cache or {}
+
     out: dict[str, list[tuple[str, str]]] = {}
-    for key, table in s.table_map.items():
-        sql = (
-            f"SELECT column_name, data_type "
-            f"FROM `{s.gcp_project}.{s.bq_dataset}`.INFORMATION_SCHEMA.COLUMNS "
-            f"WHERE table_name = '{table}' ORDER BY ordinal_position"
-        )
-        res = bq.run_select(sql)
-        if res.ok and res.rows:
-            out[key] = [(r["column_name"], r["data_type"]) for r in res.rows]
-        else:
-            logger.warning("Schema fetch failed for %s: %s", table, res.error)
+    for row in res.rows:
+        for key in key_by_table.get(row["table_name"], ()):
+            out.setdefault(key, []).append((row["column_name"], row["data_type"]))
+
+    missing = [t for t in key_by_table if not any(k in out for k in key_by_table[t])]
+    if missing:
+        logger.warning("No schema rows returned for: %s", ", ".join(sorted(missing)))
     _cache = out
     return out
 

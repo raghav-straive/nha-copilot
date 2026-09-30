@@ -42,14 +42,32 @@ CREATE TABLE IF NOT EXISTS query_log (
     execution_status   TEXT,
     error_message      TEXT,
     row_count          INTEGER,
-    response_shown     TEXT
+    response_shown     TEXT,
+    source             TEXT DEFAULT 'chat'
 );
 """
+
+# `source` distinguishes which feature produced a row: chat, explorer, or
+# pdfchat. Without it the audit trail could not tell a user's own question from
+# one the Explorer invented.
+VALID_SOURCES = {"chat", "explorer", "pdfchat", "report"}
 
 
 def init_db() -> None:
     with _lock, _connect() as conn, conn:
         conn.execute(_SCHEMA)
+        # Additive migration for databases created before `source` existed.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(query_log)")}
+        if "source" not in cols:
+            conn.execute(
+                "ALTER TABLE query_log ADD COLUMN source TEXT DEFAULT 'chat'"
+            )
+        # The log is read newest-first and is append-only, so this is the one
+        # index that matters.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_query_log_timestamp "
+            "ON query_log (timestamp DESC)"
+        )
 
 
 def log_query(
@@ -65,6 +83,7 @@ def log_query(
     error_message: str | None,
     row_count: int | None,
     response_shown: str | None,
+    source: str = "chat",
 ) -> str:
     query_id = str(uuid.uuid4())
     row = (
@@ -81,23 +100,28 @@ def log_query(
         error_message,
         row_count,
         response_shown,
+        source if source in VALID_SOURCES else "chat",
     )
     with _lock, _connect() as conn, conn:
         conn.execute(
-            "INSERT INTO query_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", row
+            "INSERT INTO query_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row
         )
     return query_id
 
 
-def fetch_logs(limit: int = 200) -> list[dict]:
+def fetch_logs(limit: int = 200, source: str | None = None) -> list[dict]:
     # Clamp: an unbounded limit turns this into a full-table scan.
     try:
         limit = max(1, min(int(limit), MAX_FETCH))
     except (TypeError, ValueError):
         limit = 200
+    sql = "SELECT * FROM query_log"
+    params: list = []
+    if source in VALID_SOURCES:
+        sql += " WHERE source = ?"
+        params.append(source)
+    sql += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limit)
     with _lock, _connect() as conn, conn:
         conn.row_factory = sqlite3.Row
-        cur = conn.execute(
-            "SELECT * FROM query_log ORDER BY timestamp DESC LIMIT ?", (limit,)
-        )
-        return [dict(r) for r in cur.fetchall()]
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]

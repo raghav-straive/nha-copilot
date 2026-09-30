@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+from threading import Lock
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -30,6 +32,66 @@ logger = logging.getLogger(__name__)
 # "how many ABHAs were created today?" asked at 03:00 IST would otherwise
 # resolve to yesterday in India — a silently wrong answer.
 IST = ZoneInfo("Asia/Kolkata")
+
+# ---- Repeated-question cache ----------------------------------------------
+# Officials re-ask the same things and the Explorer regenerates the same popular
+# questions; each repeat otherwise costs two LLM calls plus a BigQuery job.
+#
+# Two rules make this safe, and both matter:
+#  1. The role is part of the key. RBAC changes what a query may return, so an
+#     admin's cached answer must never be served to a viewer.
+#  2. The RESOLVED PERIOD is part of the key. "Today" resolves to a concrete
+#     date range, so the key changes by itself when the date rolls over — a
+#     stale number is worse than a slow one.
+# Only successful data answers are cached; clarifications and errors are not.
+_TURN_CACHE: "OrderedDict[tuple, tuple[datetime, TurnResult]]" = OrderedDict()
+_TURN_TTL = timedelta(minutes=30)
+_TURN_CACHE_MAX = 256
+_TURN_LOCK = Lock()
+
+
+def _cache_key(question: str, role: str, resolved: dict) -> tuple:
+    period = resolved.get("period") or {}
+    geo = tuple(
+        sorted(
+            (g.get("level"), g.get("lgd_code"))
+            for g in (resolved.get("geography") or [])
+        )
+    )
+    return (
+        " ".join((question or "").lower().split()),
+        role,
+        period.get("start"),
+        period.get("end"),
+        geo,
+    )
+
+
+def _cache_get(key: tuple) -> TurnResult | None:
+    with _TURN_LOCK:
+        hit = _TURN_CACHE.get(key)
+        if not hit:
+            return None
+        stamped, result = hit
+        if datetime.now(timezone.utc) - stamped > _TURN_TTL:
+            _TURN_CACHE.pop(key, None)
+            return None
+        _TURN_CACHE.move_to_end(key)  # LRU
+        return result
+
+
+def _cache_put(key: tuple, result: TurnResult) -> None:
+    with _TURN_LOCK:
+        _TURN_CACHE[key] = (datetime.now(timezone.utc), result)
+        _TURN_CACHE.move_to_end(key)
+        while len(_TURN_CACHE) > _TURN_CACHE_MAX:
+            _TURN_CACHE.popitem(last=False)
+
+
+def clear_turn_cache() -> None:
+    """Drop every cached answer. For tests, and for use after a data refresh."""
+    with _TURN_LOCK:
+        _TURN_CACHE.clear()
 
 FAILURE_MESSAGE = (
     "I was unable to answer that question. This has been logged for review. "
@@ -102,8 +164,21 @@ def run_turn(
     session_context: dict | None = None,
     today: date | None = None,
     history: list[dict] | None = None,
+    use_cache: bool = True,
 ) -> TurnResult:
     resolved = resolve_entities(question, today=today or datetime.now(IST).date())
+
+    # A repeat of an identical question, at the same role and the same resolved
+    # period, returns the previous answer. Skipped when the turn depends on
+    # conversation history, since the same words can mean different things after
+    # a different preceding turn ("what about Bihar?").
+    cache_key = None
+    if use_cache and not history:
+        cache_key = _cache_key(question, role, resolved)
+        hit = _cache_get(cache_key)
+        if hit is not None:
+            logger.info("Turn cache hit")
+            return hit
 
     # ---- Step 2: deterministic short-circuits (semantic layer decisions) ----
     if resolved["ambiguous_geography"]:
@@ -242,7 +317,7 @@ def run_turn(
             f"\n\n(Showing the first {MAX_ROWS:,} rows — narrow the question "
             "for a complete answer.)"
         )
-    return TurnResult(
+    turn = TurnResult(
         action="answer",
         answer=answer,
         sql=sql,
@@ -254,6 +329,11 @@ def run_turn(
         resolved=resolved,
         context_chips=chips,
     )
+    # Only successful data answers are cached — never a clarification, an
+    # out-of-scope reply, or an error.
+    if cache_key is not None:
+        _cache_put(cache_key, turn)
+    return turn
 
 
 def _retry_sql(llm, system_prompt, user_prompt, bad_sql, error, role):

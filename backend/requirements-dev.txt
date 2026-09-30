@@ -1,0 +1,10 @@
+# Test/dev dependencies. Install alongside requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# These were previously missing from the manifest entirely, so `pytest` only
+# worked if you happened to have it installed globally.
+-r requirements.txt
+
+pytest>=8.3
+# FastAPI's TestClient is built on httpx; needed by tests/test_api.py.
+httpx>=0.28

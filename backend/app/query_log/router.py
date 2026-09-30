@@ -10,5 +10,11 @@ router = APIRouter(tags=["admin"])
 
 
 @router.get("/query-log")
-def query_log(limit: int = 200, _: CurrentUser = Depends(require_admin)):
-    return {"logs": fetch_logs(limit=limit)}
+def query_log(
+    limit: int = 200,
+    source: str | None = None,
+    _: CurrentUser = Depends(require_admin),
+):
+    """Recent query log, newest first. `source` filters by originating feature
+    (chat | explorer | pdfchat | report); omit it for everything."""
+    return {"logs": fetch_logs(limit=limit, source=source)}

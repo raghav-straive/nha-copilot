@@ -84,6 +84,7 @@ def chat_message(
         error_message=result.error_message,
         row_count=len(result.rows) if result.action == "answer" else None,
         response_shown=shown,
+        source="chat",
     )
 
     return ChatResponse(
