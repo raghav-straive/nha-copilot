@@ -48,6 +48,68 @@ def anon():
         yield c
 
 
+# ---- startup configuration guard ----
+
+
+def _cfg(**over):
+    from types import SimpleNamespace
+
+    base = {
+        "jwt_secret": "x" * 40,
+        "app_users": "admin:StrongPw:admin",
+        "allow_insecure_dev": False,
+    }
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_secure_config_passes_when_properly_configured():
+    from app.main import _assert_secure_config
+
+    _assert_secure_config(_cfg())  # must not raise
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"jwt_secret": "change-me-to-a-long-random-string"},  # the built-in default
+        {"jwt_secret": "tooshort"},
+        {"app_users": ""},
+        {"app_users": "   "},
+    ],
+)
+def test_insecure_config_refuses_to_start(bad):
+    from app.main import _assert_secure_config
+
+    with pytest.raises(RuntimeError, match="Refusing to start"):
+        _assert_secure_config(_cfg(**bad))
+
+
+def test_allow_insecure_dev_comes_from_settings_not_the_process_environment(monkeypatch):
+    """The escape hatch must work from backend/.env.
+
+    It was read with os.getenv, which only sees the process environment — so
+    ALLOW_INSECURE_DEV=1 in backend/.env was silently ignored and the app
+    refused to start, even though that is the file the setup instructions tell
+    you to edit. Reading it through Settings covers both.
+    """
+    from app.main import _assert_secure_config
+
+    # Nothing in the process environment...
+    monkeypatch.delenv("ALLOW_INSECURE_DEV", raising=False)
+    # ...but the setting is on, as loading backend/.env would make it.
+    _assert_secure_config(_cfg(app_users="", allow_insecure_dev=True))
+
+
+def test_the_setting_is_actually_declared_on_settings():
+    # Guards against the flag being dropped from the model and silently
+    # reverting to "never bypassed".
+    from app.config import Settings
+
+    assert "allow_insecure_dev" in Settings.model_fields
+    assert "cookie_secure" in Settings.model_fields
+
+
 # ---- health ----
 
 

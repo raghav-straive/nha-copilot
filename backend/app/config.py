@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # ONLY for local development over plain http://localhost, where the browser
     # would otherwise refuse to store it.
     cookie_secure: bool = True
+    # Downgrades the startup refusal over a default JWT_SECRET / missing
+    # APP_USERS to a warning. Declared here (rather than read with os.getenv)
+    # so it works from backend/.env as well as from a real environment
+    # variable — .env is what the setup instructions actually tell you to edit,
+    # and reading the process environment alone silently ignored it.
+    allow_insecure_dev: bool = False
     # Production users, set via env to override the dev seed accounts. Format:
     #   APP_USERS="user1:password1:role1;user2:password2:role2"
     # Roles: viewer | analyst | senior_analyst | admin. Empty = dev seed users.

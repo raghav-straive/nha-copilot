@@ -6,7 +6,6 @@ and governance prompt.
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -118,15 +117,18 @@ def _assert_secure_config(cfg) -> None:
         )
     if not problems:
         return
-    if os.getenv("ALLOW_INSECURE_DEV") == "1":
+    # Read through Settings, not os.getenv: that way ALLOW_INSECURE_DEV works
+    # from backend/.env (what the setup docs tell you to edit) as well as from
+    # a real environment variable, which pydantic-settings gives precedence to.
+    if cfg.allow_insecure_dev:
         for p in problems:
             logger.warning("INSECURE DEV MODE: %s", p)
         return
     raise RuntimeError(
         "Refusing to start with insecure configuration:\n  - "
         + "\n  - ".join(problems)
-        + "\n\nSet these in the environment (see deploy/env.example), or export "
-        "ALLOW_INSECURE_DEV=1 for local development."
+        + "\n\nSet these in the environment (see deploy/env.example), or set "
+        "ALLOW_INSECURE_DEV=1 in backend/.env for local development."
     )
 
 
