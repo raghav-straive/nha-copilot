@@ -4,9 +4,16 @@
 > by the issues found in it and the optimizations available. No code — each item
 > says what is wrong, what it causes, and what to do about it.
 >
+> **Standalone breakdowns:** [`issues.md`](issues.md) — every issue with its fix
+> status · [`optimizations.md`](optimizations.md) — speed and cost improvements.
+>
 > Companion docs: [`README.md`](README.md) (setup/usage),
 > [`backend/GOVERNANCE.md`](backend/GOVERNANCE.md) (authoritative data rules),
 > [`docs/architecture.md`](docs/architecture.md) (**superseded** — PM-JAY era).
+>
+> **Note:** Parts 2 and 3 below describe the issues and optimizations *as found*.
+> Most have since been fixed in this repository — `issues.md` and
+> `optimizations.md` carry the current status for each.
 
 ---
 
