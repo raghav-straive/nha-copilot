@@ -63,17 +63,23 @@ For speed and cost improvements, see [`optimizations.md`](optimizations.md).
 | 33 | A tall word merged two OCR lines into one | P2 | ✅ Fixed |
 | 34 | PDF page images leaked memory | P2 | ✅ Fixed |
 | 35 | Dead parameter in the OCR entry point | P2 | ✅ Fixed |
+| 36 | **55 district names answered about the wrong district** | **P1** | ✅ Fixed |
+| 37 | Place detection re-resolved by the wrong name | P1 | ✅ Fixed |
+| 38 | **Grouped charts dropped categories silently** | P2 | ✅ Fixed |
+| 39 | An internal sort key leaked into chart rows | P3 | ✅ Fixed |
+| 40 | Excel export: merge stopped at column Z; widths ignored labels | P3 | ✅ Fixed |
+| 41 | Two dozen districts filed under an empty name | P3 | ✅ Fixed |
 
-**Tests: 25 → 184 backend + 90 frontend (274 total).** Every issue marked fixed
+**Tests: 25 → 195 backend + 98 frontend (293 total).** Every issue marked fixed
 has a test, except the deployment-configuration ones (1, 6) which have no local
 equivalent.
 
-**Nothing is left open.** Issues 26–35 came from later sweeps once both
+**Nothing is left open.** Issues 26–41 came from later sweeps once both
 toolchains were available. The pattern across them is worth naming: **#2, #26,
-#27 and #31 were all silent — no error, no crash, just a quietly wrong number or
-a missing one.** That is the failure mode that matters most for a tool whose
-entire value is trust in its figures, and none of it was visible without running
-the code.
+#27, #31, #36 and #38 were all silent — no error, no crash, just a quietly wrong
+number, a missing one, or a chart that omitted data and looked complete.** That
+is the failure mode that matters most for a tool whose entire value is trust in
+its figures, and none of it was visible without running the code.
 
 ---
 
@@ -901,6 +907,143 @@ and passed it, but **nothing ever read it** — confirmed by search. Harmless, b
 it implies the OCR path needs the caller's page dimensions when it doesn't (boxes
 are measured against the rendered image and returned as fractions). Removed, along
 with the list the caller was building for it.
+
+---
+
+---
+
+# A fourth sweep — issues 36 to 41
+
+Covering the last unread modules: the geography resolver's resolution logic, the
+chart decision engine, and the export helpers.
+
+## Issue 36 — 55 district names answered about the wrong district
+
+🧪 Reproduced · ✅ **Fixed** · **P1 — the most consequential finding in this document after #2**
+
+**What's wrong.** When a place name matched more than one district, the resolver
+decided it was ambiguous only if the candidates spanned **more than one state**.
+But **a post-2011 district split leaves parent and child in the same state**, so
+that check never fired for them — and whichever entry happened to be indexed
+first won.
+
+**What it caused — reproduced against the real reference workbook:**
+
+| User asks about | System silently answered about |
+|---|---|
+| **Udaipur** | Salumbar |
+| **Barmer** | Balotra |
+| **Nagaur** | Didwana-Kuchaman |
+| **Sultanpur** | Amethi |
+| **Sangrur** | Malerkotla |
+| **Ferozepur** | Fazilka |
+
+**95 district names collide within a single state; 55 of them resolved to a
+different district than the one named.** These are not obscure places — Udaipur,
+Barmer and Sultanpur are major districts. The wrong LGD code went into the
+prompt, the wrong name went on the context chip, and the answer was about
+somewhere else. No error, no clarifying question.
+
+The sharpest irony: handling post-2011 splits is called out explicitly as a
+responsibility of this layer in the original design — and this is precisely that
+case, handled backwards.
+
+**What was done.** Ambiguity is now decided on **distinct districts**, not
+distinct states. And when several districts answer to one name, if exactly one of
+them actually *carries* that name and they are all in the same state, that one
+wins — the others are pre-split aliases of it. So "Udaipur" means Udaipur, while
+genuinely undecidable names still ask:
+
+- Hamirpur (Himachal **and** Uttar Pradesh) → still asks
+- Aurangabad (Bihar, **and** Maharashtra's renamed Chhatrapati Sambhajinagar) → still asks
+- Bilaspur, Bijapur, Balrampur → still ask
+
+Six parametrised regression tests pin the split cases, plus tests that cross-state
+ambiguity survives and that a renamed district still resolves via its old name.
+
+---
+
+## Issue 37 — Place detection re-resolved by the wrong name
+
+🧪 Reproduced · ✅ **Fixed**
+
+**What's wrong.** When scanning a question for place names, the code found the
+matching district entries and then **threw them away** — taking the first entry's
+canonical name and looking *that* up again.
+
+**What it caused.** If the text matched an **alias**, the second lookup resolved
+the alias's sibling instead. Text saying "Ferozepur" found entries whose first
+was Fazilka, then confirmed Fazilka by name. Compounding #36, and wrong on its
+own: 48 alias keys re-resolved to something other than what matched.
+
+**What was done.** Detection now resolves the entries it actually matched,
+through the same shared helper as direct lookup, so the two paths cannot diverge.
+
+---
+
+## Issue 38 — Grouped charts dropped categories silently
+
+🧪 Reproduced · ✅ **Fixed**
+
+**What's wrong.** A chart caps how many categories it plots, or the bars become
+unreadable. The single-series path handles this properly: it keeps the top ones
+and folds the remainder into an **"Other"** bar, then prints *"Top 13 shown; the
+rest grouped as Other."*
+
+The **grouped** (pivot) path just **cut the list off** — no "Other", nothing
+carried over. And the chart component explicitly suppressed the explanatory note
+for grouped charts.
+
+**What it caused.** A grouped chart over more than 14 categories — say ABHA by
+district split by ownership across 30 districts — showed 14 of them, omitted the
+rest entirely, and **said nothing**. The chart looked complete. The bars didn't
+sum to the real total.
+
+**What was done.** The grouped path now folds its overflow into "Other", summing
+each group, and the note is shown for grouped charts too. Six tests cover it,
+including one asserting **the grand total per group is preserved** — that the
+plotted numbers still add up to the real ones.
+
+---
+
+## Issue 39 — An internal sort key leaked into chart rows
+
+✅ **Fixed.** Rows were ordered using a temporary `__t` total that was left
+attached to the data handed to the chart library. Nothing consumed it today, but
+it sat one careless `Object.keys()` away from appearing in a tooltip or an export.
+Stripped before returning, with a test on both paths.
+
+---
+
+## Issue 40 — Excel export: merge stopped at column Z; widths ignored labels
+
+✅ **Fixed** · 🧪 *(and one suspicion disproved by testing)*
+
+Two small defects in the spreadsheet export:
+
+1. **Column letters were computed as `String.fromCharCode(64 + n)`**, clamped at
+   26. A result with more than 26 columns had its title and footnote spanning only
+   the first 26; zero columns produced the nonsense range `A1:@1`. Replaced with
+   proper letters (27 → `AA`).
+2. **Column widths were measured from the stored value, not the displayed one.**
+   The sheet shows "Government" but the width was computed from the stored `"G"`,
+   so coded columns came out too narrow to read.
+
+> **A suspicion I checked and dropped.** I expected `A1:@1` and a 1×1 merge to
+> make the export *throw* — a single-column result like `SELECT COUNT(*) AS n` is
+> very common, so that would have been serious. I tested all five cases against
+> the real library: **every one succeeded.** Cosmetic only. Worth recording,
+> because reporting it as a crash would have been wrong.
+
+---
+
+## Issue 41 — Two dozen districts filed under an empty name
+
+✅ **Fixed.** Alias columns in the reference workbook sometimes hold only
+punctuation, which normalised to an empty string — collecting 24 unrelated
+districts under a single empty key. Both lookup paths happened to guard against
+an empty key, so nothing broke, but it was junk sitting in the index waiting for
+a future caller to trip over. Filtered at load, with a test.
 
 ---
 

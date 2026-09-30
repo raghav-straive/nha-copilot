@@ -171,9 +171,25 @@ export function buildChartData(spec: ChartSpecLike, rows: Row[], a: ChartAnalysi
       (o as any).__t = tot; return o;
     });
     if (!a.xIsTime) out.sort((x, y) => ((y as any).__t as number) - ((x as any).__t as number));
-    const fold = out.length > capBar;
-    out = out.slice(0, capBar);
-    return { chartData: out, plotSeries: groups.map((g) => ({ key: g, name: a.gl(g) })), folded: fold ? rows.length : 0 };
+    // Fold the overflow into "Other" exactly as the single-series path below
+    // does. This used to `slice(0, capBar)`, which DROPPED the extra
+    // categories outright — and ChartView suppressed the "rest grouped as
+    // Other" note for pivots, so a grouped chart over more than capBar
+    // categories quietly showed a subset and looked complete.
+    let folded = 0;
+    if (out.length > capBar) {
+      const head = out.slice(0, capBar - 1);
+      const tail = out.slice(capBar - 1);
+      folded = tail.length;
+      const other: Row = { [spec.x]: OTHER };
+      for (const g of groups) other[g] = tail.reduce((s, r) => s + (Number(r[g]) || 0), 0);
+      out = [...head, other];
+    }
+    return {
+      chartData: stripSortKey(out),
+      plotSeries: groups.map((g) => ({ key: g, name: a.gl(g) })),
+      folded,
+    };
   }
 
   const keys = activeSeries(spec, a, measure);
@@ -198,7 +214,21 @@ export function buildChartData(spec: ChartSpecLike, rows: Row[], a: ChartAnalysi
     for (const k of keys) other[k] = tail.reduce((s, r) => s + (Number(r[k]) || 0), 0);
     out = [...head, other];
   }
-  return { chartData: out, plotSeries: keys.map((s) => ({ key: s, name: pretty(s) })), folded: foldedCount };
+  return {
+    chartData: stripSortKey(out),
+    plotSeries: keys.map((s) => ({ key: s, name: pretty(s) })),
+    folded: foldedCount,
+  };
+}
+
+/** Drop the internal row total used for ordering, so it cannot reach a chart
+ * tooltip, an export, or anything else that walks the row's keys. */
+function stripSortKey(rows: Row[]): Row[] {
+  return rows.map((r) => {
+    const { __t, ...rest } = r as Row & { __t?: number };
+    void __t;
+    return rest as Row;
+  });
 }
 
 // ---- Which chart types are offered, and the default ----

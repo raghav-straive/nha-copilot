@@ -192,7 +192,10 @@ export default function ChartView({
       <div className="mt-1 space-y-0.5 text-center">
         {isPivot && chartType !== "pie" && <p className="text-[11px] text-ink-faint">Grouped by {pretty(groupKey!)}.</p>}
         {tooManyGroups && <p className="text-[11px] text-ink-faint">{pretty(groupKey!)} has {groupDistinct} values — showing totals by {pretty(spec.x)}; use Table for the full breakdown.</p>}
-        {folded > 0 && !isPivot && <p className="text-[11px] text-ink-faint">Top {MAX_CATS_BAR - 1} shown; the rest grouped as “Other”. Use Table for all.</p>}
+        {/* Shown for grouped charts too: the pivot path now folds its overflow
+            into "Other" instead of dropping it, so the note is accurate there
+            and a grouped chart no longer omits categories in silence. */}
+        {folded > 0 && <p className="text-[11px] text-ink-faint">Top {MAX_CATS_BAR - 1} shown; the rest grouped as “Other”. Use Table for all.</p>}
         {drillable && view === "chart" && <p className="text-[11px] text-ink-faint">Tip: click a {chartType === "pie" ? "slice" : "bar"} to drill into {pretty(spec.drilldown!)}.</p>}
       </div>
     </figure>

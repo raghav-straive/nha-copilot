@@ -161,8 +161,12 @@ class GeographyResolver:
             # also index the older / census name for traceability
             for alt_key in ("previous_name_2022", "census_2011_district_name"):
                 alt = row.get(alt_key, "")
-                if alt and _norm(alt) != _norm(dname):
-                    self._district_by_name.setdefault(_norm(alt), []).append(entry)
+                alt_norm = _norm(alt)
+                # `alt` can be non-empty yet normalise to nothing (a lone dash
+                # or stray punctuation in the workbook). That produced an
+                # empty-string key holding two dozen unrelated districts.
+                if alt_norm and alt_norm != _norm(dname):
+                    self._district_by_name.setdefault(alt_norm, []).append(entry)
 
     def _load_aliases(self, wb) -> None:
         if "common_aliases" not in wb.sheetnames:
@@ -215,21 +219,7 @@ class GeographyResolver:
 
         # 2. district?
         if key in self._district_by_name:
-            entries = self._district_by_name[key]
-            unique_states = {e["state_code"] for e in entries}
-            if len(unique_states) > 1:
-                opts = ", ".join(
-                    sorted({f"{e['district_name']} in {e['state_name']}" for e in entries})
-                )
-                return GeoResolution(
-                    status="ambiguous",
-                    matches=[self._district_match(e) for e in entries],
-                    message=f"There are multiple districts named "
-                    f"'{place.strip()}' — {opts}. Which did you mean?",
-                )
-            return GeoResolution(
-                status="resolved", matches=[self._district_match(entries[0])]
-            )
+            return self._resolve_district(place, key, self._district_by_name[key])
 
         # 3. pre-split parent name?
         if key in self._split_parents:
@@ -245,6 +235,54 @@ class GeographyResolver:
             )
 
         return GeoResolution(status="not_found")
+
+    def _resolve_district(
+        self, place: str, key: str, entries: list[dict]
+    ) -> GeoResolution:
+        """Turn the district entries a name matched into a resolution.
+
+        Ambiguity is decided on DISTINCT DISTRICTS, not distinct states. The
+        previous check only fired when candidates spanned more than one state —
+        but a post-2011 split leaves parent and child in the SAME state, so it
+        never fired for them and whichever entry happened to be indexed first
+        won. Asking about Udaipur silently answered about Salumbar; Barmer gave
+        Balotra; Sultanpur gave Amethi. 95 names collide inside one state and 55
+        of them resolved to a different district than the one named.
+        """
+        # The workbook can list the same district more than once (a renaming
+        # recorded in two columns), so collapse by LGD code first.
+        by_code: dict[int, dict] = {}
+        for e in entries:
+            by_code.setdefault(e["district_code"], e)
+        pool = list(by_code.values())
+
+        if len(pool) == 1:
+            return GeoResolution(
+                status="resolved", matches=[self._district_match(pool[0])]
+            )
+
+        # More than one district answers to this name. If exactly one of them
+        # actually CARRIES the name and they are all in the same state, the
+        # others are pre-split aliases of it and the user means the real one —
+        # "Udaipur" means Udaipur, not the Salumbar carved out of it.
+        exact = [e for e in pool if _norm(e["district_name"]) == key]
+        if len(exact) == 1 and len({e["state_code"] for e in pool}) == 1:
+            return GeoResolution(
+                status="resolved", matches=[self._district_match(exact[0])]
+            )
+
+        # Genuinely undecidable — ask rather than guess.
+        opts = ", ".join(
+            sorted({f"{e['district_name']} in {e['state_name']}" for e in pool})
+        )
+        return GeoResolution(
+            status="ambiguous",
+            matches=[self._district_match(e) for e in pool],
+            message=(
+                f"There are multiple districts named '{place.strip()}' — {opts}. "
+                "Which did you mean?"
+            ),
+        )
 
     def _state_match(self, code: int, name: str) -> GeoMatch:
         return GeoMatch(
@@ -295,13 +333,17 @@ class GeographyResolver:
         for key, entries in self._district_by_name.items():
             if not key or f" {key} " not in norm_text:
                 continue
-            label = entries[0]["district_name"]
+            # Resolve the entries this name actually matched. Re-resolving by
+            # entries[0]'s canonical name instead would answer about a
+            # different district whenever the matched name was an alias — the
+            # text said "Ferozepur", entries[0] was Fazilka, and looking
+            # "Fazilka" up again confirmed Fazilka.
+            res = self._resolve_district(key, key, entries)
+            label = res.matches[0].name if res.matches else key
             if label in seen:
                 continue
             seen.add(label)
-            res = self.resolve(label)
-            if res.status in ("resolved", "ambiguous"):
-                results.append(res)
+            results.append(res)
         return results
 
 

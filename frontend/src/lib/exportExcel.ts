@@ -28,6 +28,17 @@ function download(buffer: ArrayBuffer, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** 1 -> "A", 26 -> "Z", 27 -> "AA". */
+function colLetter(n: number): string {
+  let out = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out || "A";
+}
+
 function slug(s: string): string {
   return (s || "result").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "result";
 }
@@ -47,7 +58,11 @@ export async function exportToExcel(opts: {
   const ws = wb.addWorksheet("Result", { views: [{ state: "frozen", ySplit: 2 }] });
 
   const nCols = columns.length;
-  const lastCol = String.fromCharCode(64 + Math.min(nCols, 26)); // A.. for merges
+  // Proper spreadsheet column letters. The previous version was
+  // String.fromCharCode(64 + Math.min(n, 26)), which clamped at "Z", so the
+  // title and footnote of a result with more than 26 columns only spanned the
+  // first 26 — and with zero columns produced the nonsense range "A1:@1".
+  const lastCol = colLetter(Math.max(nCols, 1));
 
   // Title row
   ws.mergeCells(`A1:${lastCol}1`);
@@ -101,7 +116,13 @@ export async function exportToExcel(opts: {
     let w = Math.max(c.length + 2, 12);
     for (const r of rows.slice(0, 80)) {
       const v = r[c];
-      if (v != null) w = Math.max(w, Math.min(String(v).length + 2, 40));
+      if (v == null) continue;
+      // Measure what the cell will actually DISPLAY. Sizing on the raw value
+      // left coded columns too narrow to read: the sheet shows "Government"
+      // but the width was computed from the stored "G".
+      const shown =
+        typeof v === "number" ? String(v) : labelFor ? labelFor(c, v) : String(v);
+      w = Math.max(w, Math.min(shown.length + 2, 40));
     }
     ws.getColumn(i + 1).width = w;
   });

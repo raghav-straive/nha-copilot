@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.semantic.geography import get_geography
 from app.semantic.time_resolver import get_time_resolver
 
@@ -29,6 +31,72 @@ def test_detect_finds_state_in_sentence():
     assert any("gujarat" in n.lower() for n in names)
 
 
+# ---- post-2011 splits: the named district must win ----
+# A split leaves parent and child in the SAME state, so an across-states-only
+# ambiguity check never fired and whichever entry was indexed first won. Asking
+# about Udaipur silently answered about Salumbar.
+
+
+@pytest.mark.parametrize(
+    "asked,expected_code,expected_name",
+    [
+        ("Udaipur", 117, "Udaipur"),          # not Salumbar
+        ("Barmer", 90, "Barmer"),             # not Balotra
+        ("Nagaur", 110, "Nagaur"),            # not Didwana-Kuchaman
+        ("Sultanpur", 185, "Sultanpur"),      # not Amethi
+        ("Sangrur", 43, "Sangrur"),           # not Malerkotla
+        ("Ferozepur", 31, "Ferozepur"),       # not Fazilka
+    ],
+)
+def test_split_parent_resolves_to_the_district_named(asked, expected_code, expected_name):
+    r = get_geography().resolve(asked)
+    assert r.status == "resolved", f"{asked} should resolve, not {r.status}"
+    assert r.resolved is not None
+    assert r.resolved.lgd_code == expected_code
+    assert r.resolved.name == expected_name
+
+
+def test_cross_state_ambiguity_is_still_reported():
+    # Hamirpur exists in both Himachal Pradesh and Uttar Pradesh: genuinely
+    # undecidable, so it must ask rather than pick one.
+    r = get_geography().resolve("Hamirpur")
+    assert r.status == "ambiguous"
+    states = {m.state_name for m in r.matches}
+    assert len(states) > 1
+
+
+def test_renamed_district_still_resolves_via_its_old_name():
+    # An alias that is the only candidate should resolve to the current district.
+    r = get_geography().resolve("Barabanki")
+    assert r.status == "resolved"
+    assert r.resolved is not None
+
+
+def test_detect_reports_the_district_that_was_named_not_an_alias_sibling():
+    # detect() used to re-resolve by entries[0]'s canonical name, so text saying
+    # "Ferozepur" could come back as Fazilka.
+    hits = get_geography().detect("how many facilities in Ferozepur")
+    names = {m.name for r in hits for m in r.matches if r.status == "resolved"}
+    assert "Ferozepur" in names
+    assert "Fazilka" not in names
+
+
+def test_district_index_has_no_empty_key():
+    # A workbook cell holding only punctuation normalised to "" and collected
+    # two dozen unrelated districts under a single empty key.
+    assert "" not in get_geography()._district_by_name
+
+
+def test_detect_ignores_ordinary_questions():
+    g = get_geography()
+    for q in (
+        "How many facilities are registered by ownership type?",
+        "What is the payment success rate?",
+        "Give me a breakup of professionals by type",
+    ):
+        assert g.detect(q) == [], f"false positive on: {q}"
+
+
 def test_quarter_range_and_window_flag():
     tr = get_time_resolver().resolve("Q2 2023-24", today=date(2026, 7, 6))
     assert tr.start == date(2023, 7, 1)
@@ -52,9 +120,6 @@ def test_last_month_resolves():
 # ---- a bare "q" must not swallow the year ----
 # The quarter guard used to test `"q" not in text`, which matched the letter
 # inside ordinary words and silently dropped the year from the resolved context.
-
-
-import pytest  # noqa: E402
 
 
 @pytest.mark.parametrize(

@@ -297,3 +297,86 @@ describe("robustness", () => {
     expect(a.cnt).toBe(15);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Grouped (pivot) charts must not drop categories silently. The pivot path
+// used to slice off everything past the bar cap, and ChartView suppressed the
+// "rest grouped as Other" note for pivots — so a grouped chart over many
+// categories showed a subset and looked complete.
+// ---------------------------------------------------------------------------
+
+describe("grouped chart over more categories than fit", () => {
+  const spec: ChartSpecLike = { type: "bar", x: "district", series: ["facilities"] };
+  // 20 districts × 2 ownership groups, descending totals.
+  const data: Row[] = [];
+  for (let i = 0; i < 20; i++) {
+    data.push({ district: `D${String(i).padStart(2, "0")}`, ownership: "G", facilities: 100 - i });
+    data.push({ district: `D${String(i).padStart(2, "0")}`, ownership: "P", facilities: 50 - i });
+  }
+  const columns = ["district", "ownership", "facilities"];
+  const a = analyze(spec, data, columns);
+  const { chartData, plotSeries, folded } = buildChartData(spec, data, a, a.defaultMeasure);
+
+  it("is treated as a pivot with one series per group", () => {
+    expect(a.isPivot).toBe(true);
+    expect(plotSeries.map((p) => p.key).sort()).toEqual(["G", "P"]);
+  });
+
+  it("caps the number of categories plotted", () => {
+    expect(chartData.length).toBe(MAX_CATS_BAR);
+  });
+
+  it("reports how many categories were folded, not the raw row count", () => {
+    // 20 categories, cap of MAX_CATS_BAR with the last slot used by "Other".
+    expect(folded).toBe(20 - (MAX_CATS_BAR - 1));
+    expect(folded).not.toBe(data.length);
+  });
+
+  it("keeps the overflow in an Other bucket instead of discarding it", () => {
+    const other = chartData.find((d) => d[spec.x] === OTHER);
+    expect(other).toBeDefined();
+    expect(Number(other!.G)).toBeGreaterThan(0);
+    expect(Number(other!.P)).toBeGreaterThan(0);
+  });
+
+  it("preserves the grand total across every group", () => {
+    for (const g of ["G", "P"]) {
+      const plotted = chartData.reduce((s, d) => s + (Number(d[g]) || 0), 0);
+      const expected = data
+        .filter((r) => r.ownership === g)
+        .reduce((s, r) => s + Number(r.facilities), 0);
+      expect(plotted).toBe(expected);
+    }
+  });
+
+  it("does not leak the internal sort key into the plotted rows", () => {
+    for (const d of chartData) expect(Object.keys(d)).not.toContain("__t");
+  });
+});
+
+describe("grouped chart that fits", () => {
+  it("folds nothing and adds no Other bucket", () => {
+    const spec: ChartSpecLike = { type: "bar", x: "state", series: ["n"] };
+    const data = rows(
+      { state: "A", grp: "G", n: 1 }, { state: "A", grp: "P", n: 2 },
+      { state: "B", grp: "G", n: 3 }, { state: "B", grp: "P", n: 4 },
+    );
+    const a = analyze(spec, data, ["state", "grp", "n"]);
+    const { chartData, folded } = buildChartData(spec, data, a, a.defaultMeasure);
+    expect(folded).toBe(0);
+    expect(chartData.find((d) => d.state === OTHER)).toBeUndefined();
+    expect(chartData.length).toBe(2);
+  });
+});
+
+describe("single-series chart does not leak the sort key either", () => {
+  it("strips __t", () => {
+    const { chartData } = buildChartData(
+      { x: "state", series: ["cnt"] },
+      rows({ state: "A", cnt: 10 }, { state: "B", cnt: 3 }),
+      analyze({ x: "state", series: ["cnt"] }, rows({ state: "A", cnt: 10 })),
+      "all"
+    );
+    for (const d of chartData) expect(Object.keys(d)).not.toContain("__t");
+  });
+});
