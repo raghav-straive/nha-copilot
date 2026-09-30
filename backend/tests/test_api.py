@@ -1,4 +1,4 @@
-"""HTTP-level tests: auth, access control, compression, health.
+﻿"""HTTP-level tests: auth, access control, compression, health.
 
 These exercise the real app object, so they also cover the startup wiring
 (lifespan) and the middleware stack.
@@ -28,9 +28,24 @@ def client(tmp_path_factory):
 
 
 def _token(client, username="analyst", password="analyst123"):
+    """Log in and return the bearer token, leaving the client cookie-free.
+
+    Login now also sets an auth cookie, and TestClient persists cookies across
+    requests â€” so without this clear, every later request on the shared client
+    would authenticate via the leftover cookie and tests meaning to check the
+    unauthenticated path would silently pass for the wrong reason.
+    """
     r = client.post("/auth/login", data={"username": username, "password": password})
     assert r.status_code == 200, r.text
+    client.cookies.clear()
     return r.json()["access_token"]
+
+
+@pytest.fixture
+def anon():
+    """A client with no cookies and no token."""
+    with TestClient(app) as c:
+        yield c
 
 
 # ---- health ----
@@ -69,21 +84,96 @@ def test_refresh_issues_a_new_token(client):
     assert r.json()["role"] == "analyst"
 
 
-def test_refresh_requires_a_token(client):
-    assert client.post("/auth/refresh").status_code == 401
+def test_refresh_requires_a_token(anon):
+    assert anon.post("/auth/refresh").status_code == 401
 
 
-def test_refresh_rejects_a_forged_token(client):
-    r = client.post("/auth/refresh", headers={"Authorization": "Bearer not.a.token"})
+def test_refresh_rejects_a_forged_token(anon):
+    r = anon.post("/auth/refresh", headers={"Authorization": "Bearer not.a.token"})
     assert r.status_code == 401
+
+
+# ---- cookie auth ----
+# The point of the cookie is that a script injected into the page cannot read
+# the token. These tests check it is set with the right flags, that it actually
+# authenticates on its own, and that signing out clears it.
+
+
+def test_login_sets_an_httponly_cookie(client):
+    r = client.post(
+        "/auth/login", data={"username": "analyst", "password": "analyst123"}
+    )
+    raw = r.headers.get("set-cookie", "")
+    assert "nha_token=" in raw
+    assert "HttpOnly" in raw, "must be unreadable from page scripts"
+    assert "samesite=lax" in raw.lower(), "must not ride along on cross-site POSTs (CSRF)"
+
+
+def test_the_cookie_authenticates_without_any_header(client):
+    fresh = TestClient(app)
+    fresh.post("/auth/login", data={"username": "admin", "password": "admin123"})
+    # No Authorization header at all â€” the cookie alone must be enough.
+    r = fresh.get("/query-log")
+    assert r.status_code == 200, "cookie-only request should authenticate"
+
+
+def test_cookie_carries_the_role(client):
+    fresh = TestClient(app)
+    fresh.post("/auth/login", data={"username": "analyst", "password": "analyst123"})
+    # An analyst must still be refused the admin-only log.
+    assert fresh.get("/query-log").status_code == 403
+
+
+def test_logout_clears_the_cookie(client):
+    fresh = TestClient(app)
+    fresh.post("/auth/login", data={"username": "admin", "password": "admin123"})
+    assert fresh.get("/query-log").status_code == 200
+
+    fresh.post("/auth/logout")
+    assert fresh.get("/query-log").status_code == 401, "signed out, so no access"
+
+
+def test_logout_works_without_a_valid_token(client):
+    # Signing out must not require the thing you are trying to discard.
+    assert TestClient(app).post("/auth/logout").status_code == 200
+
+
+def test_refresh_restores_a_session_from_the_cookie_alone(client):
+    """This is what lets the frontend keep no token in browser storage: on
+    load it calls refresh with the cookie and gets a usable session back."""
+    fresh = TestClient(app)
+    fresh.post("/auth/login", data={"username": "senior", "password": "senior123"})
+    r = fresh.post("/auth/refresh")
+    assert r.status_code == 200
+    assert r.json()["username"] == "senior"
+    assert r.json()["role"] == "senior_analyst"
+
+
+def test_a_garbage_cookie_is_rejected(client):
+    fresh = TestClient(app)
+    fresh.cookies.set("nha_token", "not-a-real-token")
+    assert fresh.get("/query-log").status_code == 401
+
+
+def test_cookie_takes_precedence_over_a_stale_header(client):
+    """Cookie first: it is the safer mechanism, so a same-origin deployment
+    that sets it should win over whatever header a client sends."""
+    admin_client = TestClient(app)
+    admin_client.post("/auth/login", data={"username": "admin", "password": "admin123"})
+    analyst_token = _token(client, "analyst", "analyst123")
+    # Admin cookie + analyst header -> the admin cookie should decide.
+    r = admin_client.get(
+        "/query-log", headers={"Authorization": f"Bearer {analyst_token}"}
+    )
+    assert r.status_code == 200
 
 
 # ---- access control ----
 
 
-def test_protected_endpoints_need_a_token(client):
+def test_protected_endpoints_need_a_token(anon):
     for path in ("/chat/session/abc", "/explorer", "/query-log", "/pdfchat/documents"):
-        assert client.get(path).status_code == 401, f"{path} should require auth"
+        assert anon.get(path).status_code == 401, f"{path} should require auth"
 
 
 def test_query_log_is_admin_only(client):
@@ -163,3 +253,4 @@ def test_small_responses_are_not_compressed(client):
     # Below the threshold, framing costs more than it saves.
     r = client.get("/health", headers={"Accept-Encoding": "gzip"})
     assert r.headers.get("content-encoding") != "gzip"
+

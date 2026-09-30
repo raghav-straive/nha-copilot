@@ -32,14 +32,15 @@ how fast the app is and how much it costs to run. Bugs and security findings liv
 | 10 | **Share the Explorer cache across workers** | Halves its AI cost | ✅ Done |
 | 11 | **Cache repeated questions** | Cuts AI + database cost | ✅ Done |
 | 12 | Index the audit log's sort column | Faster admin log reads | ✅ Done |
-| 13 | Store embeddings in binary rather than text | ~10× smaller cache | ⬜ Available |
-| 14 | Use the "dry run" for better error messages | Clearer failures | ⬜ Available |
-| 15 | Load the charting library on demand | ~500 KB off first load | ⬜ Needs Node |
+| 13 | **Load the charting library on demand** | **initial download 185 KB → 60 KB** | ✅ Done |
+| 14 | Store embeddings in binary rather than text | ~10× smaller cache | ⬜ Available |
+| 15 | Use the "dry run" for better error messages | Clearer failures | ⬜ Available |
 | 16 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
 | 17 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
 
-**Measured, not assumed.** Items 7, 8 and 16 came from actually timing things —
-including #16, which looked worthwhile until measurement showed it wasn't.
+**Measured, not assumed.** Items 7, 8, 13 and 16 came from actually timing or
+building things — including #16, which looked worthwhile until measurement showed it
+wasn't, and #13, where the before and after were measured by building both ways.
 
 ---
 
@@ -228,7 +229,7 @@ now has an index. One line, and it's the only index the table needs.
 
 # Available
 
-## 13. Store embeddings in binary rather than text ⬜
+## 14. Store embeddings in binary rather than text ⬜
 
 The numerical fingerprints of each passage are currently saved as text numbers, which
 takes roughly **ten times** the space of the equivalent binary format. That's disk
@@ -243,7 +244,7 @@ problem at the current corpus size, and it changes the cache file format — so 
 needs a version bump and a rebuild on deploy. Worth doing when the corpus grows,
 not before.
 
-## 14. Use the "dry run" for better error messages ⬜
+## 15. Use the "dry run" for better error messages ⬜
 
 **What's available.** The database client already has a "dry run" method that checks a
 query and estimates its size **without running it and without ever being charged**.
@@ -261,27 +262,34 @@ improvement rather than a cost saving.
 **Recommendation.** Only do this if users are actually reporting confusing failures.
 Otherwise it makes the common case slower to help the rare one.
 
-## 15. Load the charting library on demand ⬜ *(needs Node)*
+---
 
-**Credit where due — most of this is already done.** I checked, and the heavy
-libraries are already loaded only when actually needed: the Excel export, the
-PowerPoint export, and the PDF viewer. The imports that *look* eager elsewhere only
-pull in thin wrapper files, not the libraries themselves. Whoever built this clearly
-knew the technique.
+# Also done
 
-**What's left.** The charting library (~500 KB) is still loaded upfront, even though
-no chart exists until the first answer arrives. The same treatment the PDF viewer
-already gets would defer it.
+## 13. Load the charting library on demand ✅
 
-**Why it wasn't done.** Node isn't installed in the environment this work was done
-in, so the frontend can't be built, measured, or type-checked here. Shipping
-unverified TypeScript into the one part of the app with no test safety net seemed
-worse than leaving a documented gap.
+**Credit where due — most of this was already done.** The heavy libraries were
+already loaded only when needed: the Excel export, the PowerPoint export, and the
+PDF viewer. The imports that *looked* eager elsewhere only pulled in thin wrapper
+files, not the libraries themselves. Whoever built this knew the technique.
 
-**To pick it up:** run `npm run build`, read the chunk sizes the build reports, and
-if the charting library is a meaningful share of the initial download, defer it the
-same way the PDF tab already is. Measure first — it adds a loading boundary for what
-may be a modest saving.
+**What was left.** The charting library was still loaded upfront, even though no
+chart exists until the first answer arrives.
+
+**Measured, by building it both ways:**
+
+| | Initial download |
+|---|---|
+| Before | 626.77 KB raw · **185.31 KB gzipped** |
+| After | 188.32 KB raw · **60.13 KB gzipped** |
+
+**A 68% reduction in what a user downloads before they can do anything.** The
+charting code moves to a separate 438 KB chunk, fetched only when the first chart
+appears — by which point the user has already waited for an AI answer and a database
+query, so it costs nothing perceivable.
+
+A skeleton placeholder holds the chart's space while it loads, so the layout doesn't
+jump.
 
 ---
 
@@ -325,6 +333,7 @@ at all. That costs nothing per request and carries no risk.
 
 | Change | Before | After |
 |---|---|---|
+| **Initial page download** | 185.31 KB gzipped | **60.13 KB gzipped — measured, 68% smaller** |
 | **Response size** (500-row result) | 59 KB | **7 KB — measured, 89% smaller** |
 | **Startup schema load** | 9 sequential queries, ~10–20 s | **1 query** |
 | **Weekly report load** | ~20–40 s (20 queries in sequence) | A few seconds (concurrent) |
@@ -337,10 +346,10 @@ at all. That costs nothing per request and carries no risk.
 | Crash during a PDF cache write | Full corpus re-embedded | Previous copy intact |
 | Geography parse | 72 ms | 72 ms — **measured, left alone** |
 
-The response-size and startup-time figures were measured directly. The weekly report
-and Explorer figures are expected improvements from removing sequential waiting —
-the concurrency is tested, but the wall-clock gain needs live cloud credentials to
-confirm end to end.
+The download, response-size, geography and startup figures were measured directly.
+The weekly report and Explorer figures are expected improvements from removing
+sequential waiting — the concurrency is tested, but the wall-clock gain needs live
+cloud credentials to confirm end to end.
 
 ---
 
@@ -348,9 +357,8 @@ confirm end to end.
 
 | Item | Status |
 |---|---|
-| Binary embedding storage (#13) | Available — the win is disk space, which isn't a problem yet |
-| Dry-run pre-check (#14) | Available — but it slows the common case to improve the rare one |
-| Charting library loaded upfront (#15) | Needs Node to measure; not installed here |
+| Binary embedding storage (#14) | Available — the win is disk space, which isn't a problem yet |
+| Dry-run pre-check (#15) | Available — but it slows the common case to improve the rare one |
 
 **One duplication remains, by design.** The PDF index is still loaded per server
 process. That's a little CPU and memory to re-read a cache file — it does **not**

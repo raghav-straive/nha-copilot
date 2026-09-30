@@ -51,15 +51,15 @@ For speed and cost improvements, see [`optimizations.md`](optimizations.md).
 | 21 | Unbounded audit-log query | P2 | ✅ Fixed |
 | 22 | Health check reported "ok" regardless | P2 | ✅ Fixed |
 | 23 | Test dependencies missing from the manifest | P2 | ✅ Fixed |
-| 24 | The JWT library is unmaintained | P2 | ⬜ Open |
-| 25 | Login token readable by injected scripts | P2 | ⬜ Accepted |
+| 24 | The JWT library is unmaintained | P2 | ✅ Fixed |
+| 25 | Login token readable by injected scripts | P2 | ✅ Fixed |
 
-**Tests: 25 → 140.** Every issue marked fixed above has a test, except the
-deployment-configuration ones (1, 6) which have no local equivalent.
+**Tests: 25 → 151 backend + 36 frontend.** Every issue marked fixed has a test,
+except the deployment-configuration ones (1, 6) which have no local equivalent.
 
-**Three items remain open**, all by choice: #24 needs a library swap, #25 needs an
-architectural change, and the frontend half of #20 needs Node, which wasn't
-available in the environment this work was done in.
+**Nothing is left open.** The last three — the unmaintained token library, the
+token being readable by page scripts, and the frontend not renewing sessions —
+are all now closed. See #24, #25 and #20.
 
 ---
 
@@ -518,9 +518,9 @@ copying it from the old token, so a role change — or a removed account — tak
 at the next refresh instead of persisting until expiry. Tested including the forged-
 and missing-token cases.
 
-⬜ **Still open:** the frontend doesn't call it yet. That needs Node to build and
-type-check, which wasn't available in the environment this work was done in, and
-shipping unverified TypeScript seemed worse than leaving a documented gap.
+**The frontend now calls it** — hourly while the tab is open, and once on load to
+restore a session. Node was installed to do this, so the change is type-checked and
+the production build verified.
 
 ---
 
@@ -553,52 +553,85 @@ need.
 
 ---
 
-## Issue 24 — The JWT library is unmaintained
+## Issue 24 — The JWT library was unmaintained
 
-⬜ **Open**
+🧪 Reproduced (as a deprecation warning during the test run) · ✅ **Fixed**
 
-🧪 Reproduced (as a deprecation warning during the test run)
-
-**What's wrong.** The project uses `python-jose` 3.3.0 for login tokens. It has had
+**What's wrong.** The project used `python-jose` 3.3.0 for login tokens. It has had
 no release in years, and it calls a date function that Python has deprecated and
 scheduled for removal.
 
-**What it causes.** Nothing today — it's a warning. But it will become an error on a
+**What it caused.** Nothing visible — a warning. But it would become an error on a
 future Python, and an unmaintained authentication library gets no security fixes.
 
-**Why it's still open.** Swapping to the maintained alternative (`PyJWT`) is a small
-change — encode/decode and one exception type — but it touches the authentication
-path, and it deserves its own change with its own review rather than being bundled
-into a batch of unrelated fixes.
+**What was done.** Migrated to `PyJWT`, which is actively maintained.
+
+**One security improvement came with it.** The decode call now passes an explicit
+list of permitted signing algorithms. Without that, a token can name its own
+algorithm — including `none`, meaning *no signature at all* — and some libraries
+will happily accept it. There's now a test that forges an unsigned `alg=none` token
+and asserts it's rejected, plus tests for an expired token, a token signed with the
+wrong key, and assorted malformed input.
 
 ---
 
 ## Issue 25 — Login token readable by injected scripts
 
-⬜ **Accepted, not fixed**
+✅ **Fixed** (where the deployment allows it — read on, the nuance matters)
 
-**What's wrong.** The login token is kept in browser session storage, which any
+**What's wrong.** The login token was kept in browser session storage, which any
 script running on the page can read.
 
-**Why it's not fixed.** The robust answer is to stop giving the browser a readable
-token at all and use an HTTP-only cookie instead. That's not a fix — it's an
-architectural change touching the login flow, cross-origin configuration,
-cross-site-request protection, and every frontend call. It should be a deliberate
-decision, not a side effect of a cleanup pass.
+**The complication.** The obvious fix — an httpOnly cookie, unreadable by scripts —
+only works when the frontend and backend share an origin. On a cross-origin
+deployment the cookie becomes a *third-party* cookie, which Safari already blocks
+and Chrome is phasing out. Applying cookies naively would have **broken login
+entirely** for the GitHub Pages demo.
 
-**Meanwhile:** it's a normal trade-off for a prototype and it's recorded here so the
-decision is explicit rather than accidental.
+**What made it workable.** The recommended deployment is already same-origin:
+Layout A in `deploy/nginx.conf.example` has nginx serve the built frontend *and*
+proxy `/auth`, `/chat`, … to the backend on the same host. So the secure path is
+available exactly where it matters — the real internal deployment — and only the
+public demo is the exception.
+
+**What was done — dual-mode auth:**
+
+- Login now sets an **httpOnly, SameSite=Lax, Secure** cookie *and* returns the
+  token in the body as before.
+- The backend accepts either, and **prefers the cookie**, since it's the safer one.
+- The frontend **probes which mode it has**: after login it asks the backend to
+  renew using the cookie alone. If that works, cookie auth is available and the app
+  **never writes a token to browser storage at all** — an injected script has
+  nothing to read. If it fails, it falls back to session storage as before.
+- `POST /auth/logout` clears the cookie. It's deliberately unauthenticated: signing
+  out must work even with an expired token, and it only ever removes a cookie.
+
+**CSRF.** Cookies are sent automatically, so a cookie alone would let another site
+act as the signed-in user. `SameSite=Lax` stops browsers attaching it to cross-site
+POSTs, and every state-changing endpoint here is a POST.
+
+**Two supporting changes.** The rate limiter now reads the cookie as well, or every
+cookie-authenticated user would have shared one IP bucket (undoing Issue 6). And
+`COOKIE_SECURE` is configurable, because a `Secure` cookie can't be stored over
+plain `http://localhost` during development.
+
+**Honest limitation.** On a cross-origin deployment the token is still in session
+storage — that's a browser constraint, not a shortcut. The difference is that the
+secure path is now the default wherever it's possible, and the fallback is a
+deliberate, documented exception rather than the only behaviour.
 
 ---
 
 # What remains open
 
-| # | Item | Why it's still open |
-|---|---|---|
-| 24 | Unmaintained JWT library | Touches the auth path; deserves its own reviewed change |
-| 25 | Login token in browser storage | Needs an architectural change, not a fix |
-| 20 | Frontend not calling the refresh endpoint | Needs Node to build and type-check; unavailable here |
-| — | Recharts loaded upfront in the frontend | Same reason — can't measure the bundle without Node |
+**Nothing.** Every issue in this document is fixed.
+
+Two things are worth carrying forward as *awareness* rather than open work:
+
+| Item | Note |
+|---|---|
+| Cross-origin deployments still store the token | A browser limitation (third-party cookies). Same-origin deployment — the recommended layout — avoids it entirely |
+| PDF index still loads per server process | Re-reads a cache file; does **not** re-embed, so no AI cost. Removing it means building the index as a deploy step |
 
 ---
 

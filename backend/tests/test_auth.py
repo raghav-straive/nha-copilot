@@ -75,15 +75,58 @@ def test_token_round_trips_username_and_role():
 
 
 def test_token_signed_with_another_secret_is_rejected():
-    from jose import jwt as jose_jwt, JWTError
+    import jwt as pyjwt
+    from jwt import InvalidTokenError
 
     from app.config import get_settings
 
-    forged = jose_jwt.encode(
+    forged = pyjwt.encode(
         {"sub": "attacker", "role": "admin"}, "a-different-secret", algorithm="HS256"
     )
-    with pytest.raises(JWTError):
+    with pytest.raises(InvalidTokenError):
         decode_token(forged)
     # And the real secret still works, so the test is meaningful.
     assert decode_token(create_token("bob", "viewer"))["sub"] == "bob"
     assert get_settings().jwt_algorithm == "HS256"
+
+
+def test_expired_token_is_rejected():
+    import jwt as pyjwt
+    from jwt import ExpiredSignatureError
+
+    from app.config import get_settings
+    from datetime import datetime, timedelta, timezone
+
+    s = get_settings()
+    stale = pyjwt.encode(
+        {
+            "sub": "alice",
+            "role": "admin",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+        },
+        s.jwt_secret,
+        algorithm=s.jwt_algorithm,
+    )
+    with pytest.raises(ExpiredSignatureError):
+        decode_token(stale)
+
+
+def test_unsigned_token_is_rejected():
+    """An attacker must not be able to pick the algorithm. A token declaring
+    alg=none has no signature at all, and decode must refuse it."""
+    import jwt as pyjwt
+    from jwt import InvalidTokenError
+
+    unsigned = pyjwt.encode(
+        {"sub": "attacker", "role": "admin"}, key="", algorithm="none"
+    )
+    with pytest.raises(InvalidTokenError):
+        decode_token(unsigned)
+
+
+def test_malformed_token_is_rejected():
+    from jwt import InvalidTokenError
+
+    for junk in ("", "not.a.token", "a.b", "....."):
+        with pytest.raises(InvalidTokenError):
+            decode_token(junk)

@@ -20,14 +20,18 @@ def user_key(request: Request) -> str:
     Keying on the `sub` claim rather than the raw token means re-logging in does
     not reset the bucket, and no token material reaches limiter storage or logs.
     """
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        # Imported lazily: main.py imports this module early, and app.auth.jwt
-        # pulls in config.
-        from app.auth.jwt import decode_token
+    # Imported lazily: main.py imports this module early, and app.auth.jwt
+    # pulls in config.
+    from app.auth.jwt import decode_token, token_from_request
 
+    auth = request.headers.get("authorization", "")
+    header_token = auth.split(" ", 1)[1] if auth.lower().startswith("bearer ") else None
+    # Same precedence as the auth dependency: cookie first, then header. Without
+    # the cookie here, every cookie-authenticated user would share the IP bucket.
+    token = token_from_request(request, header_token)
+    if token:
         try:
-            sub = decode_token(auth.split(" ", 1)[1]).get("sub")
+            sub = decode_token(token).get("sub")
             if sub:
                 return f"user:{sub}"
         except Exception:  # noqa: BLE001 - unauthenticated/expired: fall back to IP

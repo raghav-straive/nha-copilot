@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+﻿import { lazy, Suspense, useEffect, useState } from "react";
 import { fetchExplorer, type ExplorerCard, type ExplorerData } from "../api";
-import ChartView from "./ChartView";
+// Lazy: keeps recharts out of the initial bundle. No chart exists until an
+// answer arrives, so nothing is delayed by deferring it.
+const ChartView = lazy(() => import("./ChartView"));
 import ResultTable from "./ResultTable";
 
 export default function Explorer({
@@ -37,7 +39,7 @@ export default function Explorer({
         <div>
           <h2 className="text-lg font-semibold text-ink">Explorer</h2>
           <p className="text-[13px] text-ink-muted">
-            Interesting patterns and trends surfaced from the data — click any card to dig in.
+            Interesting patterns and trends surfaced from the data â€” click any card to dig in.
           </p>
         </div>
         <button
@@ -95,7 +97,13 @@ function Card({ card, onExplore }: { card: ExplorerCard; onExplore: (q: string) 
       {card.summary && <p className="mt-2 text-[13px] text-ink">{card.summary}</p>}
 
       {card.chart && card.rows.length > 1 ? (
-        <ChartView spec={card.chart} rows={card.rows} columns={card.columns} />
+        <Suspense
+          fallback={
+            <div className="my-3 h-64 animate-pulse rounded border border-line bg-surface-alt" />
+          }
+        >
+          <ChartView spec={card.chart} rows={card.rows} columns={card.columns} />
+        </Suspense>
       ) : (
         card.rows.length > 0 && <ResultTable columns={card.columns} rows={card.rows} />
       )}
@@ -117,9 +125,10 @@ function Card({ card, onExplore }: { card: ExplorerCard; onExplore: (q: string) 
           className="flex items-center gap-1 text-[12px] font-semibold text-brand transition hover:text-brand-dark"
         >
           Discuss in chat
-          <span>→</span>
+          <span>â†’</span>
         </button>
       </div>
     </div>
   );
 }
+

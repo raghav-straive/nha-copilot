@@ -11,7 +11,9 @@ tzdata>=2024.2 ; sys_platform == "win32"
 google-cloud-bigquery==3.27.0
 openai==2.31.0
 sqlglot==26.0.1
-python-jose[cryptography]==3.3.0
+# PyJWT, not python-jose: the latter has had no release in years and calls a
+# date function Python has deprecated and scheduled for removal.
+PyJWT>=2.10,<3
 bcrypt>=4.2
 slowapi==0.1.9
 openpyxl==3.1.5

@@ -1,7 +1,9 @@
-import { useState } from "react";
+﻿import { lazy, Suspense, useState } from "react";
 import type { ChatResponse } from "../api";
 import Avatar from "./Avatar";
-import ChartView from "./ChartView";
+// Lazy: keeps recharts out of the initial bundle. No chart exists until an
+// answer arrives, so nothing is delayed by deferring it.
+const ChartView = lazy(() => import("./ChartView"));
 import ResultTable from "./ResultTable";
 import SqlViewer from "./SqlViewer";
 
@@ -119,7 +121,7 @@ export default function MessageBubble({
       ? { label: "Out of scope", cls: "bg-gold/10 text-gold" }
       : null;
 
-  // Example questions to offer for a "chat" reply — from options or question texts.
+  // Example questions to offer for a "chat" reply â€” from options or question texts.
   const chatExamples =
     action === "chat"
       ? (data?.options && data.options.length
@@ -175,7 +177,13 @@ export default function MessageBubble({
           </div>
         )}
         {data?.chart && data.rows && data.rows.length > 1 ? (
-          <ChartView spec={data.chart} rows={data.rows} columns={data.columns} query={query} onDrill={onDrill} />
+          <Suspense
+            fallback={
+              <div className="my-3 h-64 animate-pulse rounded border border-line bg-surface-alt" />
+            }
+          >
+            <ChartView spec={data.chart} rows={data.rows} columns={data.columns} query={query} onDrill={onDrill} />
+          </Suspense>
         ) : (
           data?.columns && data.rows && data.rows.length > 0 && (
             <ResultTable columns={data.columns} rows={data.rows} query={query} />
@@ -309,3 +317,4 @@ function ClarifyForm({
     </div>
   );
 }
+

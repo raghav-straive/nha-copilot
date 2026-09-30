@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-to-a-long-random-string"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480
+    # The auth cookie is Secure (HTTPS-only) by default. Set COOKIE_SECURE=false
+    # ONLY for local development over plain http://localhost, where the browser
+    # would otherwise refuse to store it.
+    cookie_secure: bool = True
     # Production users, set via env to override the dev seed accounts. Format:
     #   APP_USERS="user1:password1:role1;user2:password2:role2"
     # Roles: viewer | analyst | senior_analyst | admin. Empty = dev seed users.

@@ -1,4 +1,4 @@
-// Typed client for the FastAPI backend.
+﻿// Typed client for the FastAPI backend.
 //
 // In dev, VITE_API_BASE is unset -> relative URLs go through the Vite proxy.
 // In production (GitHub Pages), set VITE_API_BASE to the backend's HTTPS URL.
@@ -10,6 +10,69 @@ export interface LoginResponse {
   token_type: string;
   role: string;
   username: string;
+}
+
+/**
+ * Every request to the backend goes through here.
+ *
+ * `credentials: "include"` sends the httpOnly auth cookie, which is the
+ * preferred mechanism: a script injected into the page cannot read it. That
+ * works when the frontend and backend share an origin â€” the recommended nginx
+ * layout, where one host serves the app and proxies /auth, /chat, ... to the
+ * backend.
+ *
+ * The Authorization header is still sent when we hold a token, for cross-origin
+ * deployments (the GitHub Pages demo, or a separate API host) where the cookie
+ * would be a third-party cookie and is blocked by default in several browsers.
+ * The backend accepts either and prefers the cookie.
+ */
+async function authFetch(
+  token: string | null,
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const headers = new Headers(init.headers ?? {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(url(path), { ...init, headers, credentials: "include" });
+}
+
+/**
+ * Ask the backend to renew the session using the cookie alone â€” no
+ * Authorization header.
+ *
+ * Doubles as a capability probe. If this succeeds, cookie auth is working and
+ * the app never needs to put a token in browser storage. If it fails, we are on
+ * a cross-origin deployment and fall back to storing the token.
+ */
+export async function refreshFromCookie(): Promise<LoginResponse | null> {
+  try {
+    const res = await fetch(url("/auth/refresh"), {
+      method: "POST",
+      credentials: "include",
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null; // offline or blocked â€” treat as "no cookie session"
+  }
+}
+
+/** Renew a session we already hold a token for, to avoid an 8-hour cutoff. */
+export async function refreshSession(token: string | null): Promise<LoginResponse | null> {
+  try {
+    const res = await authFetch(token, "/auth/refresh", { method: "POST" });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Clear the auth cookie server-side. Safe to call with an expired token. */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(url("/auth/logout"), { method: "POST", credentials: "include" });
+  } catch {
+    // Signing out locally still proceeds.
+  }
 }
 
 export interface ChartSpec {
@@ -41,6 +104,7 @@ export async function login(username: string, password: string): Promise<LoginRe
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    credentials: "include", // let the browser store the httpOnly auth cookie
   });
   if (!res.ok) throw new Error("Invalid username or password");
   return res.json();
@@ -87,9 +151,7 @@ export async function fetchWeeklyReport(
   start: string,
   end: string
 ): Promise<WeeklyReport> {
-  const res = await fetch(url(`/report/weekly?start=${start}&end=${end}`), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await authFetch(token, `/report/weekly?start=${start}&end=${end}`);
   if (!res.ok) throw new Error(`Report failed (${res.status}): ${await res.text()}`);
   return res.json();
 }
@@ -111,9 +173,7 @@ export interface ExplorerData {
 }
 
 export async function fetchExplorer(token: string, force = false): Promise<ExplorerData> {
-  const res = await fetch(url(`/explorer?force=${force}`), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await authFetch(token, `/explorer?force=${force}`);
   if (!res.ok) throw new Error(`Explorer failed (${res.status}): ${await res.text()}`);
   return res.json();
 }
@@ -150,17 +210,15 @@ export interface PdfDocument {
 }
 
 export async function fetchPdfDocuments(token: string): Promise<PdfDocument[]> {
-  const res = await fetch(url("/pdfchat/documents"), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await authFetch(token, "/pdfchat/documents");
   if (!res.ok) throw new Error(`Documents failed (${res.status})`);
   return (await res.json()).documents ?? [];
 }
 
 export async function sendPdfMessage(token: string, message: string): Promise<PdfChatResponse> {
-  const res = await fetch(url("/pdfchat/message"), {
+  const res = await authFetch(token, "/pdfchat/message", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
   });
   if (!res.ok) throw new Error(`Request failed (${res.status}): ${await res.text()}`);
@@ -169,9 +227,7 @@ export async function sendPdfMessage(token: string, message: string): Promise<Pd
 
 /** Fetch a PDF (auth-protected) as a blob object URL for the viewer. */
 export async function fetchPdfBlobUrl(token: string, pdfId: string): Promise<string> {
-  const res = await fetch(url(`/pdfchat/file/${pdfId}`), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await authFetch(token, `/pdfchat/file/${pdfId}`);
   if (!res.ok) throw new Error(`PDF fetch failed (${res.status})`);
   return URL.createObjectURL(await res.blob());
 }
@@ -180,9 +236,7 @@ export async function fetchPdfBlobUrl(token: string, pdfId: string): Promise<str
  * is the same render the OCR boxes were measured against, so fractional highlight
  * coordinates align exactly. */
 export async function fetchPdfPageUrl(token: string, pdfId: string, page: number): Promise<string> {
-  const res = await fetch(url(`/pdfchat/page/${pdfId}/${page}`), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const res = await authFetch(token, `/pdfchat/page/${pdfId}/${page}`);
   if (!res.ok) throw new Error(`Page render failed (${res.status})`);
   return URL.createObjectURL(await res.blob());
 }
@@ -192,12 +246,9 @@ export async function sendMessage(
   message: string,
   sessionId: string | null
 ): Promise<ChatResponse> {
-  const res = await fetch(url("/chat/message"), {
+  const res = await authFetch(token, "/chat/message", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, session_id: sessionId }),
   });
   if (!res.ok) {
@@ -206,3 +257,4 @@ export async function sendMessage(
   }
   return res.json();
 }
+
