@@ -109,10 +109,8 @@ def extract_chunks(pdf_id: str, pdf_name: str, pdf_path: str) -> list[Chunk]:
     need_ocr: list[int] = []
 
     with pdfplumber.open(pdf_path) as pdf:
-        page_dims: list[tuple[float, float]] = []
         for i, page in enumerate(pdf.pages):
             w, h = float(page.width), float(page.height)
-            page_dims.append((w, h))
             page_meta[i] = {"width": w, "height": h}
             try:
                 # Normalize pdfplumber's absolute points to page fractions (0..1)
@@ -134,7 +132,7 @@ def extract_chunks(pdf_id: str, pdf_name: str, pdf_path: str) -> list[Chunk]:
         from app.pdfchat.ocr import ocr_document
 
         logger.info("%s: OCR needed for %d page(s)", pdf_name, len(need_ocr))
-        lines_by_page.update(ocr_document(pdf_path, need_ocr, page_dims))
+        lines_by_page.update(ocr_document(pdf_path, need_ocr))
 
     chunks: list[Chunk] = []
     for i in sorted(lines_by_page):

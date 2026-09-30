@@ -58,14 +58,22 @@ For speed and cost improvements, see [`optimizations.md`](optimizations.md).
 | 28 | Tests never ran in CI | P2 | ✅ Fixed |
 | 29 | 14 dependency vulnerabilities, 1 critical | P2 | ✅ Fixed (10 of 14) |
 | 30 | Replacing a PDF served a stale page image | P2 | ✅ Fixed |
+| 31 | **Column totals vanished on core metrics** | **P1** | ✅ Fixed |
+| 32 | **Rates and averages were being summed** | P2 | ✅ Fixed |
+| 33 | A tall word merged two OCR lines into one | P2 | ✅ Fixed |
+| 34 | PDF page images leaked memory | P2 | ✅ Fixed |
+| 35 | Dead parameter in the OCR entry point | P2 | ✅ Fixed |
 
-**Tests: 25 → 170 backend + 36 frontend.** Every issue marked fixed has a test,
-except the deployment-configuration ones (1, 6) which have no local equivalent.
+**Tests: 25 → 184 backend + 90 frontend (274 total).** Every issue marked fixed
+has a test, except the deployment-configuration ones (1, 6) which have no local
+equivalent.
 
-**Nothing is left open.** Issues 26–30 came from a later sweep once both
-toolchains were available; #26 and #27 are the most consequential findings in this
-whole document after #2, because both produced **silently wrong date ranges** in a
-tool whose entire value is trust in its numbers.
+**Nothing is left open.** Issues 26–35 came from later sweeps once both
+toolchains were available. The pattern across them is worth naming: **#2, #26,
+#27 and #31 were all silent — no error, no crash, just a quietly wrong number or
+a missing one.** That is the failure mode that matters most for a tool whose
+entire value is trust in its figures, and none of it was visible without running
+the code.
 
 ---
 
@@ -766,6 +774,133 @@ what it's for. Narrow (needs a live replacement) but wrong when it happens.
 
 **What was done.** The file's fingerprint is now part of the cache key, so the
 renderer invalidates on the same signal the index already uses.
+
+---
+
+---
+
+# A third sweep — issues 31 to 35
+
+Covering the areas not yet read line by line: the OCR module (the largest single
+file) and the remaining frontend components. All five were reproduced by running
+code.
+
+## Issue 31 — Column totals vanished on core metrics
+
+🧪 Reproduced · ✅ **Fixed** · **P1**
+
+**What's wrong.** Result tables show a total per column, but only for columns that
+are genuinely additive — summing LGD codes or averages is meaningless. The check
+for "is this summable?" tested whether the column name **contained** certain
+substrings.
+
+Substrings hide inside ordinary words:
+
+| Column | Total | Why |
+|---|---|---|
+| `registrations` | ❌ suppressed | "regist**ratio**ns" contains `ratio` |
+| `registration_count` | ❌ suppressed | same |
+| `population` | ❌ suppressed | "popu**lat**ion" contains `lat` |
+| `cumulative_total` | ❌ suppressed | "cumu**lat**ive" contains `lat` |
+| `related_facilities` | ❌ suppressed | "re**lat**ed" contains `lat` |
+| `operations` | ❌ suppressed | "ope**ratio**ns" contains `ratio` |
+| `scan_and_share` | ❌ suppressed | `share` matched |
+
+**What it caused.** **Facility and professional *registration*, and *Scan & Share*
+transactions, are headline metrics of this tool** — and their column totals
+silently disappeared. The model picks its own column aliases, so whether a user
+saw a total depended on whether the alias happened to contain a hidden substring.
+Nothing errored; the total just wasn't there.
+
+**What was done.** The check now splits the column name into words and matches
+whole words, so `registrations` is one word and no longer contains `ratio`.
+`share` was dropped from the list entirely — in this dataset it almost always
+means Scan & Share, which is a count; a genuine proportion is still caught by
+`pct`/`percent`. 54 tests cover both directions.
+
+---
+
+## Issue 32 — Rates and averages were being summed
+
+🧪 Reproduced · ✅ **Fixed**
+
+**What's wrong.** The same check was wrong in the *opposite* direction too. It
+used word-boundary markers for `avg` and `rate` — but **in JavaScript a word
+boundary does not break at an underscore**, because `_` counts as a word
+character.
+
+**What it caused.** `avg_amount`, `success_rate` and `paid_rate` never matched, so
+the app **added up averages and rates** and presented the result as a total. A
+summed success rate is not a number that means anything, but it looked like one.
+
+**What was done.** Fixed by the same word-splitting change as #31 — splitting on
+underscores makes `avg` and `rate` their own words, so they now match.
+
+> Worth noting how these two travelled together: one regex was simultaneously too
+> loose (silently dropping real totals) and too strict (silently summing rates).
+> Both directions are covered by tests now.
+
+---
+
+## Issue 33 — A tall word merged two OCR lines into one
+
+🧪 Reproduced · ✅ **Fixed**
+
+**What's wrong.** The Google Vision OCR path groups word boxes into lines by
+checking whether a word's vertical centre falls inside a line's span — and it
+**grew that span with every word added**.
+
+**What it caused.** One unusually tall element — a superscript, a table rule, an
+inline mark — stretched its line's span until the *next* line's centre fell inside
+it, merging two lines into one. A citation highlight then covered text the answer
+never cited. Since pointing at the exact cited line is the entire purpose of the
+feature, this quietly undermined what it exists to do.
+
+Reproduced with synthetic word boxes: two clearly separate lines with one tall
+word between them collapsed into a single line.
+
+**What was done.** Words are now matched against the line's **anchor** — the
+centre of its first word — rather than an accumulating span, with a tolerance
+taken from the smaller of the two word heights so a tall word cannot widen the
+band for everything after it. This is the same approach the text-layer path in
+`ingest.py` already used, so the two engines now agree.
+
+14 new tests cover both engines: grouping, reading order, page-fraction
+normalisation, low-confidence filtering, API errors, and zero-size pages.
+
+---
+
+## Issue 34 — PDF page images leaked memory
+
+📖 Read from code · ✅ **Fixed**
+
+**What's wrong.** Two problems in the PDF viewer:
+
+1. When a page fetch was **superseded** — you page forward before the previous
+   image arrives — the code dropped the reference without releasing the image. The
+   browser holds it for the life of the tab.
+2. The page cache was **unbounded**: one image per page visited, released only when
+   the component unmounted.
+
+**What it caused.** Paging quickly through a document leaked a few hundred KB per
+skipped page, and browsing a long document held every page visited in memory at
+once.
+
+**What was done.** Superseded images are now released explicitly, and the cache is
+bounded to a small working set — enough to page back and forth without refetching
+— evicting oldest first.
+
+---
+
+## Issue 35 — Dead parameter in the OCR entry point
+
+🧪 Reproduced · ✅ **Fixed**
+
+`ocr_document()` declared a `page_dims` parameter, and the caller dutifully built
+and passed it, but **nothing ever read it** — confirmed by search. Harmless, but
+it implies the OCR path needs the caller's page dimensions when it doesn't (boxes
+are measured against the rendered image and returned as fractions). Removed, along
+with the list the caller was building for it.
 
 ---
 

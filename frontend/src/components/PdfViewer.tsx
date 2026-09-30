@@ -5,6 +5,11 @@ import { fetchPdfPageUrl, type LineBox } from "../api";
 // boxes were measured against) and overlays highlights as fractions × the image's
 // displayed size — so highlights line up pixel-for-pixel regardless of PDF
 // point-space quirks across libraries.
+
+// Rendered pages are blob URLs holding a few hundred KB each. Keep a small
+// working set (enough to page back and forth without refetching) and revoke the
+// rest, rather than holding every page visited.
+const MAX_CACHED_PAGES = 12;
 export default function PdfViewer({
   token,
   pdfId,
@@ -41,14 +46,33 @@ export default function PdfViewer({
     setDims(null);
     const cached = cache.current.get(key);
     if (cached) {
+      // Refresh recency so this page is not the next one evicted.
+      cache.current.delete(key);
+      cache.current.set(key, cached);
       setImgUrl(cached);
       return;
     }
     setLoading(true);
     fetchPdfPageUrl(token, pdfId, page)
       .then((u) => {
-        if (cancelled) return;
+        if (cancelled) {
+          // The page changed while this was in flight. The blob URL already
+          // exists, so dropping the reference without revoking it would leak
+          // the image (a few hundred KB) for the life of the tab — and paging
+          // quickly through a document does this on every skipped page.
+          URL.revokeObjectURL(u);
+          return;
+        }
         cache.current.set(key, u);
+        // Bound the cache: one blob per visited page would otherwise hold a
+        // whole long document in memory until unmount.
+        while (cache.current.size > MAX_CACHED_PAGES) {
+          const oldest = cache.current.keys().next().value as string | undefined;
+          if (oldest === undefined) break;
+          const url = cache.current.get(oldest);
+          cache.current.delete(oldest);
+          if (url && url !== u) URL.revokeObjectURL(url);
+        }
         setImgUrl(u);
       })
       .catch(() => !cancelled && setImgUrl(null))

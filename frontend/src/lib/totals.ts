@@ -4,8 +4,38 @@
 // like an identifier, code, year, flag, or a rate/percentage/average are NOT
 // summed (a sum of averages or of LGD codes is meaningless) — those return null.
 
-const NON_SUMMABLE =
-  /(^id$|_id$|^id_|_cd$|_code$|code$|pincode|_flag$|flag$|year|_yr$|\bavg\b|average|mean|median|\brate\b|ratio|percent|pct|share|%|lat|lon|longitude|latitude)/i;
+// Matched against the column name split into words, NOT as substrings of the
+// whole name. A substring regex was wrong in both directions:
+//
+//   suppressed real totals — "ratio" hides inside regist-RATIO-ns and
+//     ope-RATIO-ns; "lat" hides inside cumu-LAT-ive, popu-LAT-ion,
+//     re-LAT-ed and trans-LAT-ions; "share" matched scan_and_share.
+//     Registration and Scan & Share are headline metrics of this tool, and
+//     their totals silently vanished.
+//
+//   summed things it should not — \bavg\b and \brate\b never fired on
+//     avg_amount or success_rate, because in JavaScript \b does not break at
+//     an underscore (it counts as a word character). So rates and averages
+//     were being added up, which produces a meaningless number.
+//
+// "share" is deliberately absent: in this dataset it almost always means Scan
+// & Share, which is a count. A genuine proportion is caught by pct/percent.
+const NON_SUMMABLE_WORDS = new Set([
+  "id", "ids", "cd", "code", "codes", "pincode", "zipcode",
+  "flag", "flags", "year", "yr",
+  "avg", "average", "mean", "median",
+  "rate", "ratio", "percent", "percentage", "pct",
+  "lat", "latitude", "lon", "lng", "longitude",
+]);
+
+/** True when a column is a label or a derived proportion rather than an
+ * additive measure, so a column total would be meaningless. */
+function isNonSummable(column: string): boolean {
+  const words = column.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.some((w) => NON_SUMMABLE_WORDS.has(w))) return true;
+  // A trailing "%" survives the split above as an empty token.
+  return column.includes("%");
+}
 
 function toNum(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -20,7 +50,7 @@ export function columnTotals(
 ): Record<string, number | null> {
   const out: Record<string, number | null> = {};
   for (const c of columns) {
-    if (NON_SUMMABLE.test(c)) {
+    if (isNonSummable(c)) {
       out[c] = null;
       continue;
     }

@@ -22,6 +22,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from threading import Lock
 
 from app.config import get_settings
 from app.pdfchat.ingest import LineBox
@@ -37,6 +38,11 @@ _COMMON = [
 ]
 
 _vision_singleton = None  # google.cloud.vision.ImageAnnotatorClient, created once
+_vision_lock = Lock()     # so two concurrent first-uses don't build two clients
+# Whether the Vision pre-flight probe succeeded. Cached for the process: the API
+# being enabled and the credentials being authorized does not change per
+# document, and the probe was costing one Vision call for every PDF indexed.
+_vision_probe_result: bool | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -94,7 +100,11 @@ def _resolve_engine() -> str | None:
 def _vision_client():
     """Lazily build (and cache) a Vision client using the app's credentials."""
     global _vision_singleton
-    if _vision_singleton is None:
+    if _vision_singleton is not None:
+        return _vision_singleton
+    with _vision_lock:
+        if _vision_singleton is not None:  # built while we waited
+            return _vision_singleton
         import json
 
         from google.cloud import vision
@@ -120,9 +130,14 @@ def _vision_client():
 # Main entry point
 # --------------------------------------------------------------------------- #
 def ocr_document(
-    pdf_path: str, page_indices: list[int], page_dims: list[tuple[float, float]], dpi: int | None = None
+    pdf_path: str, page_indices: list[int], dpi: int | None = None
 ) -> dict[int, list[LineBox]]:
-    """OCR the given 0-based page indices. Returns {page_index: [LineBox]} in page fractions."""
+    """OCR the given 0-based page indices. Returns {page_index: [LineBox]} in page fractions.
+
+    Boxes come back as page fractions measured against the rendered image, so
+    the caller's point-space page dimensions are not needed here (an earlier
+    `page_dims` argument was passed in but never used).
+    """
     if not page_indices:
         return {}
 
@@ -169,19 +184,21 @@ def ocr_document(
     BATCH = workers
     pdf = pdfium.PdfDocument(pdf_path)
     try:
-        for start in range(0, len(page_indices), BATCH):
-            batch = page_indices[start : start + BATCH]
-            images: list[tuple[int, "object"]] = []
-            for idx in batch:
-                try:
-                    images.append((idx, pdf[idx].render(scale=scale).to_pil()))
-                except Exception:  # noqa: BLE001
-                    logger.warning("Render failed on page %d", idx, exc_info=True)
-                    out[idx] = []
-            with ThreadPoolExecutor(max_workers=workers) as ex:
+        # One pool for the whole document rather than one per batch — spinning
+        # worker threads up and down for every few pages is pure overhead.
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for start in range(0, len(page_indices), BATCH):
+                batch = page_indices[start : start + BATCH]
+                images: list[tuple[int, "object"]] = []
+                for idx in batch:
+                    try:
+                        images.append((idx, pdf[idx].render(scale=scale).to_pil()))
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Render failed on page %d", idx, exc_info=True)
+                        out[idx] = []
                 for idx, lines in ex.map(_read_page, images):
                     out[idx] = lines
-            images.clear()
+                images.clear()
     finally:
         pdf.close()
     return out
@@ -194,17 +211,26 @@ def _png_bytes(img) -> bytes:
 
 
 def _vision_probe_ok() -> bool:
-    """Tiny call to confirm Vision is actually usable (API enabled + authorized)."""
+    """Tiny call to confirm Vision is actually usable (API enabled + authorized).
+
+    Cached for the process — whether the API is enabled and the credentials are
+    authorized does not vary per document, and this was spending one Vision call
+    for every PDF indexed.
+    """
+    global _vision_probe_result
+    if _vision_probe_result is not None:
+        return _vision_probe_result
     try:
         from PIL import Image
 
         buf = io.BytesIO()
         Image.new("RGB", (4, 4), "white").save(buf, format="PNG")
         _vision_lines(buf.getvalue())  # blank image -> no text, but exercises the API
-        return True
+        _vision_probe_result = True
     except Exception as e:  # noqa: BLE001
         logger.warning("Vision probe error: %s", str(e)[:200])
-        return False
+        _vision_probe_result = False
+    return _vision_probe_result
 
 
 # --------------------------------------------------------------------------- #
@@ -297,9 +323,26 @@ def _vision_lines(content: bytes) -> list[LineBox]:
     rows: list[dict] = []
     for y0, x0, x1, y1, txt in words:
         cy = (y0 + y1) / 2.0
-        row = next((r for r in rows if r["y0"] <= cy <= r["y1"]), None)
+        h = max(y1 - y0, 1.0)
+        # Match against the row's ANCHOR centre — the centre of its first word —
+        # not its accumulated vertical span. Testing against the growing span
+        # let one unusually tall word (a superscript, a table rule, an inline
+        # mark) stretch a row until the NEXT line's centre fell inside it,
+        # merging two visual lines into one. A citation highlight then covered
+        # text the answer never cited.
+        #
+        # The tolerance uses the SMALLER of the two word heights, so a tall word
+        # joining a row cannot widen the band for everything after it. This is
+        # the same anchor-plus-tolerance approach _page_lines uses in ingest.py.
+        row = next(
+            (r for r in rows if abs(cy - r["anchor"]) <= 0.6 * min(r["h0"], h)),
+            None,
+        )
         if row is None:
-            rows.append({"words": [(x0, txt)], "x0": x0, "x1": x1, "y0": y0, "y1": y1})
+            rows.append({
+                "words": [(x0, txt)], "x0": x0, "x1": x1, "y0": y0, "y1": y1,
+                "anchor": cy, "h0": h,
+            })
         else:
             row["words"].append((x0, txt))
             row["x0"], row["x1"] = min(row["x0"], x0), max(row["x1"], x1)

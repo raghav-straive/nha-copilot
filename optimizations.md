@@ -36,12 +36,17 @@ how fast the app is and how much it costs to run. Bugs and security findings liv
 | 14 | Store embeddings in binary rather than text | ~10× smaller cache | ⬜ Available |
 | 15 | Use the "dry run" for better error messages | Clearer failures | ⬜ Available |
 | 16 | **Upgrade the build toolchain** | **build 6.2 s → 1.0 s, bundle 2% smaller** | ✅ Done |
-| 17 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
-| 18 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
+| 17 | **Cache the Vision OCR pre-flight probe** | one API call per run, not per PDF | ✅ Done |
+| 18 | **One OCR thread pool per document, not per batch** | removes per-batch churn | ✅ Done |
+| 19 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
+| 20 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
 
-**Measured, not assumed.** Items 7, 8, 13 and 16 came from actually timing or
-building things — including #16, which looked worthwhile until measurement showed it
-wasn't, and #13, where the before and after were measured by building both ways.
+**16 done, 2 available, 2 rejected.**
+
+**Measured, not assumed.** Items 7, 8, 13, 16 and 19 came from actually timing or
+building things — including #19, which looked obviously worthwhile until
+measurement showed it wasn't, and #13, where the before and after were measured by
+building the bundle both ways.
 
 ---
 
@@ -306,15 +311,36 @@ critical advisory), but it came with a free speed win. Upgrading `vite` 6 → 8,
 | Initial download | 60.13 KB gzipped | **58.92 KB gzipped** |
 | Test run | 829 ms | 378 ms |
 
-Verified after upgrading: build succeeds, typecheck passes, all 36 tests pass.
+Verified after upgrading: build succeeds, typecheck passes, all tests pass.
 A faster build matters more than it looks — it's the loop every future change
 runs through.
+
+## 17. Cache the Vision OCR pre-flight probe ✅
+
+Before OCR-ing a scanned document with Google Vision, the code makes a tiny probe
+call to confirm the API is enabled and the credentials work, so a misconfigured
+deployment falls back to local OCR instead of silently indexing blank pages. Good
+idea — but it ran **once per document**.
+
+Whether the API is enabled doesn't change between documents. Indexing 50 scanned
+PDFs meant 50 billable probe calls. Now cached for the process: one probe per run.
+
+Also added a lock around the Vision client's lazy construction, so two concurrent
+first-uses can't build two clients.
+
+## 18. One OCR thread pool per document, not per batch ✅
+
+Pages are OCR'd in small batches to bound memory (rendering a whole scanned
+document at high DPI would exhaust RAM). But a fresh thread pool was created and
+torn down **for every batch** — so a 40-page scan spun up ten pools. The pool now
+wraps the whole document while the batching, which is what actually bounds
+memory, stays exactly as it was.
 
 ---
 
 # Rejected
 
-## 17. Caching the geography workbook parse ❌ *(ruled out by measurement)*
+## 19. Caching the geography workbook parse ❌ *(ruled out by measurement)*
 
 **The idea.** Place-name resolution loads a spreadsheet of states, districts,
 aliases and district splits at every startup. Parsing a spreadsheet sounds slow, so
@@ -330,7 +356,7 @@ exchange for nothing a user could perceive.
 **Recorded because** it's the kind of optimization that sounds obviously correct and
 would have been a pure loss. The measurement took two minutes and saved the change.
 
-## 17. Rewriting non-English column labels locally ❌
+## 20. Rewriting non-English column labels locally ❌
 
 **The idea.** When the AI labels a result column in Hindi script, the database rejects
 the query and the app spends an entire extra AI call regenerating it. Fixing those
