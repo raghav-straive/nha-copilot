@@ -1,17 +1,17 @@
 # NHA Analytics Co-Pilot (Prototype)
 
-> **Repository:** https://github.com/raghav-straive/nha-copilot (private)
+[![Live App](https://img.shields.io/badge/%F0%9F%9A%80%20Frontend-Open-0f7c8b?style=for-the-badge)](https://raghav-straive.github.io/nha-copilot/)
+
+> **Frontend:** https://raghav-straive.github.io/nha-copilot/
 >
-> **Deployment status: not deployed.** There is no hosted instance of this copy.
-> GitHub Pages cannot host it as things stand — Pages is unavailable for a
-> *private* repository on a Free plan, so the Pages workflow is set to manual
-> only. See [Deploying this copy](#deploying-this-copy) for the three routes.
+> ⚠️ **The frontend is hosted; the backend is not.** The page loads, but sign-in
+> and every query need the FastAPI backend running at a reachable HTTPS URL with
+> BigQuery and OpenAI credentials. Until that exists, set the repository variable
+> `VITE_API_BASE` to its URL and re-run the deploy workflow. See
+> [Deploying this copy](#deploying-this-copy).
 >
-> Originally authored by **Mohit Chaurasiya**
-> ([zerobug-mohit/nha-copilot](https://github.com/zerobug-mohit/nha-copilot),
-> whose public demo is at https://zerobug-mohit.github.io/nha-copilot/). This
-> copy keeps that history and adds a reviewed-and-hardened pass — see
-> [`issues.md`](issues.md) and [`optimizations.md`](optimizations.md).
+> Reviewed and hardened — see [`issues.md`](issues.md) (45 issues) and
+> [`optimizations.md`](optimizations.md) (22 optimizations).
 
 A web-based **natural-language → SQL** chat co-pilot for NHA / ABDM officials to
 query **ABDM (Ayushman Bharat Digital Mission) rollout data** in plain English —
@@ -157,14 +157,13 @@ against. See [`deploy/SELF_HOSTING.md`](deploy/SELF_HOSTING.md).
 
 | Route | What it takes | Notes |
 |---|---|---|
-| **Self-host both on one host** *(recommended)* | One VM + nginx | Layout A in [`deploy/nginx.conf.example`](deploy/nginx.conf.example): nginx serves the built frontend and proxies the API on the same origin. **Same-origin means the httpOnly auth cookie works**, which is the safer login path — see [`issues.md`](issues.md) #25. Build with `VITE_API_BASE` empty and `VITE_BASE=/` |
-| **Make the repo public** | A click | GitHub Pages then works on the Free plan and the existing workflow deploys to `https://raghav-straive.github.io/nha-copilot/`. But it publishes the code and `backend/GOVERNANCE.md`, which carries the real ABDM schema and business rules — decide that deliberately |
-| **Keep it private, upgrade the plan** | GitHub Pro | Pages becomes available for private repos. Still cross-origin to the backend, so login falls back to a stored token rather than the cookie |
+| **GitHub Pages** *(currently in use)* | Already set up | Deployed from [`.github/workflows/deploy-frontend.yml`](.github/workflows/deploy-frontend.yml) to https://raghav-straive.github.io/nha-copilot/ on every push touching `frontend/`. Cross-origin to the backend, so sign-in uses a stored token rather than the httpOnly cookie, and the backend must list this origin in `CORS_ORIGINS` |
+| **Self-host both on one host** *(most secure)* | One VM + nginx | Layout A in [`deploy/nginx.conf.example`](deploy/nginx.conf.example): nginx serves the built frontend and proxies the API on the same origin. **Same-origin means the httpOnly auth cookie works** — the safer login path, see [`issues.md`](issues.md) #25. Build with `VITE_API_BASE` empty and `VITE_BASE=/` |
 
-If you take a Pages route, enable Pages (Settings → Pages → Source: **GitHub
-Actions**), set the repository variable `VITE_API_BASE` to the backend's HTTPS
-URL, add that Pages origin to the backend's `CORS_ORIGINS`, and re-enable the
-`push` trigger in [`.github/workflows/deploy-frontend.yml`](.github/workflows/deploy-frontend.yml).
+To point the hosted frontend at a backend: set the repository variable
+`VITE_API_BASE` (Settings → Secrets and variables → Actions → Variables) to its
+HTTPS URL with no trailing slash, add `https://raghav-straive.github.io` to the
+backend's `CORS_ORIGINS`, and push or re-run the workflow.
 
 Set `OPENAI_MODEL`, `APP_USERS`, `JWT_SECRET` and the GCP credentials via the
 environment; table names default to the loaded names in `app/config.py` and only

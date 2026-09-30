@@ -1,35 +1,29 @@
 name: Deploy frontend to GitHub Pages
 
-# MANUAL ONLY — and it will fail until GitHub Pages is available here.
+# Builds the React app and publishes it to GitHub Pages on every push to main
+# that touches the frontend.
 #
-# GitHub Pages is not offered for a PRIVATE repository on a Free plan. With the
-# repo private, enabling Pages is refused outright ("Your current plan does not
-# support GitHub Pages for this repository"), so this workflow's build job
-# succeeded and its deploy job failed on every single push. The automatic
-# trigger is therefore switched off, to stop a guaranteed failure (and a failure
-# email) on every commit. The frontend is still built and type-checked on every
-# push by the `Tests` workflow, so nothing is lost by not running this.
+# Requires Pages enabled with Source: "GitHub Actions" (Settings -> Pages).
+# Note Pages is only available for a PRIVATE repository on a paid plan; this
+# repository is public, which is what makes it work on the Free plan.
 #
-# To use Pages, first make one of these true:
-#   * make the repository public, or
-#   * upgrade the plan (Pro/Team) to get Pages on private repos,
-# then enable Settings -> Pages -> Source: "GitHub Actions", set the repository
-# variable VITE_API_BASE to the backend's HTTPS URL, add that Pages origin to
-# the backend's CORS_ORIGINS, and restore the `push:` trigger below.
+# Set the repository VARIABLE `VITE_API_BASE` to the backend's HTTPS URL
+# (Settings -> Secrets and variables -> Actions -> Variables). Without it the
+# app builds with a relative API base, so the page loads but sign-in fails —
+# there is no backend at the Pages origin.
 #
-# The recommended alternative is to skip Pages and serve the built frontend from
-# the same nginx host as the backend (Layout A in deploy/nginx.conf.example).
-# That is same-origin, which is what lets the httpOnly auth cookie work — see
-# issues.md #25. Then no Pages deployment is needed at all.
+# The backend must also list https://raghav-straive.github.io in CORS_ORIGINS.
+# Being cross-origin, sign-in falls back to a stored token rather than the
+# httpOnly cookie; serving both from one nginx host avoids that (see
+# deploy/nginx.conf.example, Layout A, and issues.md #25).
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch: {}
-  # Restore this once Pages is actually available for the repository:
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - "frontend/**"
-  #     - ".github/workflows/deploy-frontend.yml"
 
 permissions:
   contents: read
