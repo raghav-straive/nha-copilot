@@ -130,8 +130,8 @@ export default function App() {
       </div>
       <footer className="border-t border-line bg-surface px-4 py-1.5 text-center text-[11px] text-ink-faint">
         For support, contact the developer at{" "}
-        <a href="mailto:mchaurasiya@wjcf.in" className="font-medium text-brand hover:underline">
-          mchaurasiya@wjcf.in
+        <a href="mailto:himanshu.raghav@straive.com" className="font-medium text-brand hover:underline">
+          himanshu.raghav@straive.com
         </a>
       </footer>
     </div>

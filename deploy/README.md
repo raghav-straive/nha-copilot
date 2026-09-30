@@ -32,7 +32,7 @@ sudo apt-get update && sudo apt-get install -y caddy
 ### 3. Get the code and install the backend
 ```bash
 sudo useradd -r -m -d /opt/nha-copilot nha || true
-sudo git clone https://github.com/zerobug-mohit/nha-copilot.git /opt/nha-copilot
+sudo git clone https://github.com/raghav-straive/nha-copilot.git /opt/nha-copilot
 cd /opt/nha-copilot/backend
 sudo python3 -m venv .venv
 sudo .venv/bin/pip install -r requirements.txt
@@ -77,19 +77,27 @@ Test from your laptop: `https://34-93-1-2.nip.io/health` → `{"status":"ok"}` w
 1. In the repo: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 2. **Settings → Secrets and variables → Actions → Variables → New variable:**
    `VITE_API_BASE = https://34-93-1-2.nip.io`
-3. Push to `main` (or run the **Deploy frontend to GitHub Pages** workflow manually).
+3. Run the **Deploy frontend to GitHub Pages** workflow (Actions → Run workflow).
    It builds with that API base and publishes to
-   **https://zerobug-mohit.github.io/nha-copilot/**.
+   **https://raghav-straive.github.io/nha-copilot/**.
 
 Make sure the backend's `CORS_ORIGINS` in `/etc/nha-copilot/env` is
-`https://zerobug-mohit.github.io` (already the default), then
-`sudo systemctl restart nha-copilot`.
+`https://raghav-straive.github.io`, then `sudo systemctl restart nha-copilot`.
+
+> **Pages will not work until it is available for this repository.** It is
+> unavailable for a *private* repo on a Free plan, which is why the workflow's
+> automatic `push` trigger is switched off — it only ever failed at the deploy
+> step. Either make the repo public, or upgrade the plan, or skip Pages entirely
+> and serve the frontend from the same nginx host as the backend (Layout A in
+> `nginx.conf.example`, which is the recommended setup and also lets the
+> httpOnly auth cookie work). See "Deploying this copy" in the root README.
 
 ---
 
 ## Verify end-to-end
-Open **https://zerobug-mohit.github.io/nha-copilot/**, log in with an `APP_USERS`
-account, and run a query. If login hangs, check: backend HTTPS reachable, CORS
+Open the frontend — **https://raghav-straive.github.io/nha-copilot/** on a Pages
+deployment, or just the nginx host itself with Layout A — log in with an
+`APP_USERS` account, and run a query. If login hangs, check: backend HTTPS reachable, CORS
 origin matches exactly, and `VITE_API_BASE` has no trailing slash.
 
 ## Updating later

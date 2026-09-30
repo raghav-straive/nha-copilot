@@ -1,8 +1,17 @@
 # NHA Analytics Co-Pilot (Prototype)
 
-[![Live App](https://img.shields.io/badge/%F0%9F%9A%80%20Live%20App-Open-0f7c8b?style=for-the-badge)](https://zerobug-mohit.github.io/nha-copilot/)
-
-> **Live demo:** https://zerobug-mohit.github.io/nha-copilot/
+> **Repository:** https://github.com/raghav-straive/nha-copilot (private)
+>
+> **Deployment status: not deployed.** There is no hosted instance of this copy.
+> GitHub Pages cannot host it as things stand — Pages is unavailable for a
+> *private* repository on a Free plan, so the Pages workflow is set to manual
+> only. See [Deploying this copy](#deploying-this-copy) for the three routes.
+>
+> Originally authored by **Mohit Chaurasiya**
+> ([zerobug-mohit/nha-copilot](https://github.com/zerobug-mohit/nha-copilot),
+> whose public demo is at https://zerobug-mohit.github.io/nha-copilot/). This
+> copy keeps that history and adds a reviewed-and-hardened pass — see
+> [`issues.md`](issues.md) and [`optimizations.md`](optimizations.md).
 
 A web-based **natural-language → SQL** chat co-pilot for NHA / ABDM officials to
 query **ABDM (Ayushman Bharat Digital Mission) rollout data** in plain English —
@@ -134,11 +143,33 @@ joins, dates, geography, language mirroring, and numeric accuracy vs BigQuery:
 cd backend && ./.venv/Scripts/python.exe scripts/eval_model.py
 ```
 
-## Deployment
-Frontend builds to static files; backend runs as a service behind a reverse
-proxy. Set `OPENAI_MODEL`, `APP_USERS`, and the GCP credentials via the
+## Deploying this copy
+
+**Nothing is hosted yet.** Two things are needed, and the frontend is the easy
+half — on its own it is a UI with no API to talk to.
+
+**1. The backend must run somewhere reachable.** It needs a host, a BigQuery
+service-account key with read access to the nine tables, and an OpenAI key. That
+is the real prerequisite: without it there is nothing to deploy a frontend
+against. See [`deploy/SELF_HOSTING.md`](deploy/SELF_HOSTING.md).
+
+**2. Then pick how the frontend is served:**
+
+| Route | What it takes | Notes |
+|---|---|---|
+| **Self-host both on one host** *(recommended)* | One VM + nginx | Layout A in [`deploy/nginx.conf.example`](deploy/nginx.conf.example): nginx serves the built frontend and proxies the API on the same origin. **Same-origin means the httpOnly auth cookie works**, which is the safer login path — see [`issues.md`](issues.md) #25. Build with `VITE_API_BASE` empty and `VITE_BASE=/` |
+| **Make the repo public** | A click | GitHub Pages then works on the Free plan and the existing workflow deploys to `https://raghav-straive.github.io/nha-copilot/`. But it publishes the code and `backend/GOVERNANCE.md`, which carries the real ABDM schema and business rules — decide that deliberately |
+| **Keep it private, upgrade the plan** | GitHub Pro | Pages becomes available for private repos. Still cross-origin to the backend, so login falls back to a stored token rather than the cookie |
+
+If you take a Pages route, enable Pages (Settings → Pages → Source: **GitHub
+Actions**), set the repository variable `VITE_API_BASE` to the backend's HTTPS
+URL, add that Pages origin to the backend's `CORS_ORIGINS`, and re-enable the
+`push` trigger in [`.github/workflows/deploy-frontend.yml`](.github/workflows/deploy-frontend.yml).
+
+Set `OPENAI_MODEL`, `APP_USERS`, `JWT_SECRET` and the GCP credentials via the
 environment; table names default to the loaded names in `app/config.py` and only
-need overriding if yours differ.
+need overriding if yours differ. Note the app **refuses to start** with the
+default `JWT_SECRET` or without `APP_USERS` — see [`issues.md`](issues.md) #4.
 
 - **Self-hosting on your own infrastructure (nginx / IIS / Docker):** see
   **[`deploy/SELF_HOSTING.md`](deploy/SELF_HOSTING.md)** — a step-by-step,
