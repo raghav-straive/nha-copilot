@@ -31,6 +31,9 @@ export const OTHER = "Other";
 
 // ---- Value → friendly label maps (ABDM domain) ----
 // Per-column coded-value maps. Keyed by lowercased column name.
+// NOTE: lib/reportPptx.ts carries its own ownerName/hprName for the weekly
+// deck, which is built without this engine. If a new code appears in the data,
+// update BOTH so the deck and the chat UI agree.
 const COLUMN_MAPS: Record<string, Record<string, string>> = {
   hpr_type: { d: "Doctor", n: "Nurse", p: "Pharmacist", D: "Doctor", N: "Nurse", P: "Pharmacist" },
   active: { t: "Active", f: "Inactive", true: "Active", false: "Inactive" },

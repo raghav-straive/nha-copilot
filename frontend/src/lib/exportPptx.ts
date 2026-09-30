@@ -24,8 +24,13 @@ export async function exportChartToPptx(opts: {
   categories: string[]; // x labels (already friendly)
   series: { name: string; values: number[] }[];
   query?: string;
+  /** True when the on-screen chart is a horizontal bar chart. The engine turns
+   * bars sideways once there are many categories or the labels are long; the
+   * export always used vertical columns, so the slide did not match the screen
+   * and long state names ended up crammed onto the category axis. */
+  horizontal?: boolean;
 }) {
-  const { title, type, categories, series, query } = opts;
+  const { title, type, categories, series, query, horizontal = false } = opts;
   const mod: any = await import("pptxgenjs");
   const PptxGen = mod.default || mod;
   const pptx = new PptxGen();
@@ -70,7 +75,7 @@ export async function exportChartToPptx(opts: {
     catAxisLabelFontSize: 10,
     valAxisLabelFontFace: FONT,
     valAxisLabelFontSize: 10,
-    barDir: "col",
+    barDir: horizontal ? "bar" : "col",
     ...(type === "line" || type === "area" ? { lineSmooth: true } : {}),
   });
 

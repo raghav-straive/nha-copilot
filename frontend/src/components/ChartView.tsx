@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
+// No Area/AreaChart: allowedTypes() never offers "area" and defaultType()
+// folds a requested area chart into a line, so the area branch was unreachable
+// and only pulled recharts' area modules into the bundle.
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart,
+  Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart,
   Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import type { ChartSpec } from "../api";
@@ -47,7 +50,7 @@ export default function ChartView({
   onDrill?: (value: string, dimension: string) => void;
 }) {
   const analysis = useMemo(() => analyze(spec, rows, columns), [spec, rows, columns]);
-  const { numericCols, groupKey, valueKey, groupDistinct, isPivot, tooManyGroups, xIsTime, scalesComparable, labelFor, fl } = analysis;
+  const { numericCols, groupKey, valueKey, groupDistinct, isPivot, tooManyGroups, scalesComparable, labelFor, fl } = analysis;
 
   const [measure, setMeasure] = useState<string>(analysis.defaultMeasure);
 
@@ -88,6 +91,7 @@ export default function ChartView({
     categories: chartData.map((d) => fl(d[spec.x])),
     series: plotSeries.map((ps) => ({ name: ps.name, values: chartData.map((d) => Number(d[ps.key]) || 0) })),
     query,
+    horizontal, // so the slide matches the orientation on screen
   });
   const exportXlsx = () => exportToExcel({ title: spec.title || "Result", columns: tableColumns, rows, query, labelFor: (c, v) => cellFmt(c, v) });
 
@@ -96,12 +100,10 @@ export default function ChartView({
     interval: 0, angle: 0, textAnchor: "middle", height: 30, tickMargin: 8, minTickGap: 0,
   };
 
-  const renderSeries = (kind: "bar" | "line" | "area") =>
+  const renderSeries = (kind: "bar" | "line") =>
     plotSeries.map((ps, i) =>
       kind === "line" ? (
         <Line key={ps.key} name={ps.name} type="monotone" dataKey={ps.key} stroke={colorFor(i)} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-      ) : kind === "area" ? (
-        <Area key={ps.key} name={ps.name} type="monotone" dataKey={ps.key} stroke={colorFor(i)} fill={colorFor(i)} fillOpacity={0.15} strokeWidth={2} />
       ) : (
         <Bar key={ps.key} name={ps.name} dataKey={ps.key} fill={colorFor(i)} radius={horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]} maxBarSize={horizontal ? 22 : 64}
           onClick={(e: any) => handleDrill(e?.payload ?? e)} cursor={drillable ? "pointer" : "default"}>

@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { makeLabeler, toNum } from "../lib/chartEngine";
 import { exportToExcel } from "../lib/exportExcel";
 import { columnTotals, formatTotal, fmtNum } from "../lib/totals";
 
@@ -10,14 +12,42 @@ export default function ResultTable({
   rows: Record<string, unknown>[];
   query?: string;
 }) {
+  // Memoised: totals scan every row (up to the 5,000-row cap), and this
+  // component re-renders whenever a new chat message arrives — so without this
+  // every past result table recomputed its totals on each new answer.
+  const totals = useMemo(() => columnTotals(columns, rows), [columns, rows]);
+
+  // Decode the dataset's coded values for display — G/P/PP, t/f, d/n/p — using
+  // the same mapping the charts use. The table previously showed the raw codes
+  // while the chart beside it showed "Government"/"Private", and the two Excel
+  // buttons produced different files from identical data.
+  const cellLabel = useMemo(() => {
+    const labelers: Record<string, (v: unknown) => string> = {};
+    for (const c of columns) {
+      const values = rows.map((r) => r[c]);
+      const numeric =
+        values.length > 0 &&
+        values.every((v) => v == null || v === "" || toNum(v) !== null) &&
+        values.some((v) => toNum(v) !== null);
+      if (!numeric) labelers[c] = makeLabeler(c, values);
+    }
+    return (col: string, v: unknown) =>
+      typeof v === "number"
+        ? fmtNum(v)
+        : labelers[col]
+          ? labelers[col](v)
+          : formatCell(v);
+  }, [columns, rows]);
+
   if (!rows || rows.length === 0) return null;
-  const totals = columnTotals(columns, rows);
   const showTotals = rows.length > 1 && Object.values(totals).some((v) => v !== null);
   return (
     <div className="mt-3">
       <div className="mb-1.5 flex justify-end">
         <button
-          onClick={() => exportToExcel({ title: "Result", columns, rows, query })}
+          onClick={() =>
+            exportToExcel({ title: "Result", columns, rows, query, labelFor: cellLabel })
+          }
           className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-[11px] font-medium text-ink-muted transition hover:border-brand hover:text-brand"
           title="Download as formatted Excel"
         >
@@ -46,7 +76,7 @@ export default function ResultTable({
             <tr key={i} className="border-b border-line/60 last:border-0 hover:bg-brand-light/40">
               {columns.map((c) => (
                 <td key={c} className="whitespace-nowrap px-3 py-1.5 tabular-nums text-ink">
-                  {formatCell(row[c])}
+                  {cellLabel(c, row[c])}
                 </td>
               ))}
             </tr>

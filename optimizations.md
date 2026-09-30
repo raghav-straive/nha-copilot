@@ -38,10 +38,12 @@ how fast the app is and how much it costs to run. Bugs and security findings liv
 | 16 | **Upgrade the build toolchain** | **build 6.2 s → 1.0 s, bundle 2% smaller** | ✅ Done |
 | 17 | **Cache the Vision OCR pre-flight probe** | one API call per run, not per PDF | ✅ Done |
 | 18 | **One OCR thread pool per document, not per batch** | removes per-batch churn | ✅ Done |
-| 19 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
-| 20 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
+| 19 | **Delete the unreachable area-chart code** | **chart chunk 10 KB smaller** | ✅ Done |
+| 20 | **Memoise the result table's totals** | no rescan per new message | ✅ Done |
+| 21 | Cache the geography workbook parse | — | ❌ Ruled out by measurement |
+| 22 | Rewrite non-English column labels locally | — | ❌ Rejected as unsafe |
 
-**16 done, 2 available, 2 rejected.**
+**18 done, 2 available, 2 rejected.**
 
 **Measured, not assumed.** Items 7, 8, 13, 16 and 19 came from actually timing or
 building things — including #19, which looked obviously worthwhile until
@@ -328,6 +330,41 @@ PDFs meant 50 billable probe calls. Now cached for the process: one probe per ru
 Also added a lock around the Vision client's lazy construction, so two concurrent
 first-uses can't build two clients.
 
+## 19. Delete the unreachable area-chart code ✅
+
+**How it was found.** `tsconfig.json` had the two compiler checks that catch dead
+code switched off (Issue 45). Turning them on immediately flagged `AreaChart`
+imported from the charting library and never used.
+
+Following that up: the chart's series renderer is only ever called with `"line"`
+and `"bar"`, because the type chooser never offers "area" and folds a requested
+area chart into a line. **The whole area-chart branch was unreachable** — it
+existed only to pull the library's area modules into the build.
+
+| | Chart chunk |
+|---|---|
+| Before | 438.02 KB · **125.75 KB gzipped** |
+| After | 408.15 KB · **115.63 KB gzipped** |
+
+**10 KB off the download for deleting code that could never run.** The checks are
+now left on, so this cannot quietly accumulate again.
+
+## 20. Memoise the result table's totals ✅
+
+Every result table computes a total per column, scanning every row — up to the
+5,000-row cap from Optimization 11's sibling fix. That ran on **every render**,
+and a result table re-renders whenever a new chat message arrives.
+
+So in a ten-message conversation, each new answer rescanned the rows of all ten
+previous tables. Now memoised on the columns and rows, alongside the label
+mapping added in Issue 42.
+
+> **What I did *not* do, and why:** the obvious next step is memoising the whole
+> message component so past answers stop re-rendering at all. That needs the
+> parent's callbacks wrapped too, and what remains after this fix is ordinary
+> React reconciliation of at most 100 table rows — cheap. Not worth the risk
+> without a measurement showing it matters.
+
 ## 18. One OCR thread pool per document, not per batch ✅
 
 Pages are OCR'd in small batches to bound memory (rendering a whole scanned
@@ -340,7 +377,7 @@ memory, stays exactly as it was.
 
 # Rejected
 
-## 19. Caching the geography workbook parse ❌ *(ruled out by measurement)*
+## 21. Caching the geography workbook parse ❌ *(ruled out by measurement)*
 
 **The idea.** Place-name resolution loads a spreadsheet of states, districts,
 aliases and district splits at every startup. Parsing a spreadsheet sounds slow, so
@@ -356,7 +393,7 @@ exchange for nothing a user could perceive.
 **Recorded because** it's the kind of optimization that sounds obviously correct and
 would have been a pure loss. The measurement took two minutes and saved the change.
 
-## 20. Rewriting non-English column labels locally ❌
+## 22. Rewriting non-English column labels locally ❌
 
 **The idea.** When the AI labels a result column in Hindi script, the database rejects
 the query and the app spends an entire extra AI call regenerating it. Fixing those
@@ -378,7 +415,8 @@ at all. That costs nothing per request and carries no risk.
 
 | Change | Before | After |
 |---|---|---|
-| **Initial page download** | 185.31 KB gzipped | **58.92 KB gzipped — measured, 68% smaller** |
+| **Initial page download** | 185.31 KB gzipped | **60.66 KB gzipped — measured, 67% smaller** |
+| **Chart chunk** (loaded on demand) | 125.75 KB gzipped | **115.63 KB gzipped** (dead code removed) |
 | **Production build time** | 6.2 s | **1.0 s** (toolchain upgrade) |
 | **Response size** (500-row result) | 59 KB | **7 KB — measured, 89% smaller** |
 | **Startup schema load** | 9 sequential queries, ~10–20 s | **1 query** |

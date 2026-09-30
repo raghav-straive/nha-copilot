@@ -31,6 +31,11 @@ function inr(n: number) {
 }
 const num = (n: number) => Math.round(n).toLocaleString("en-IN");
 const nowStr = () => new Date().toLocaleString(undefined, { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+// NOTE: these coded-value mappings are also defined in chartEngine.ts
+// (COLUMN_MAPS / VALUE_SETS), which the chat charts and result tables use. If
+// the dataset gains a new ownership or professional code, update BOTH — they
+// are deliberately separate because this deck is built without the chart
+// engine, but they must agree.
 const ownerName = (o: string) => (o === "G" ? "Government" : o === "P" ? "Private" : o === "PP" ? "Public-Private" : o);
 const hprName = (h: string) => (h === "d" ? "Doctor" : h === "n" ? "Nurse" : h === "p" ? "Pharmacist" : h);
 

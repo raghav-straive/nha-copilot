@@ -1,4 +1,4 @@
-import { columnTotals, formatTotal } from "./totals";
+import { columnTotals } from "./totals";
 
 // Brand palette (ARGB for ExcelJS, no leading #).
 const TEAL = "FF0F7C8B";

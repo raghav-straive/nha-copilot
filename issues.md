@@ -69,6 +69,10 @@ For speed and cost improvements, see [`optimizations.md`](optimizations.md).
 | 39 | An internal sort key leaked into chart rows | P3 | ✅ Fixed |
 | 40 | Excel export: merge stopped at column Z; widths ignored labels | P3 | ✅ Fixed |
 | 41 | Two dozen districts filed under an empty name | P3 | ✅ Fixed |
+| 42 | **Tables showed raw codes while charts showed names** | P2 | ✅ Fixed |
+| 43 | The two Excel buttons produced different files | P2 | ✅ Fixed |
+| 44 | Horizontal bar charts exported as vertical columns | P3 | ✅ Fixed |
+| 45 | Dead-code checks were switched off, hiding real dead code | P3 | ✅ Fixed |
 
 **Tests: 25 → 195 backend + 98 frontend (293 total).** Every issue marked fixed
 has a test, except the deployment-configuration ones (1, 6) which have no local
@@ -1044,6 +1048,105 @@ punctuation, which normalised to an empty string — collecting 24 unrelated
 districts under a single empty key. Both lookup paths happened to guard against
 an empty key, so nothing broke, but it was junk sitting in the index waiting for
 a future caller to trip over. Filtered at load, with a test.
+
+---
+
+---
+
+# A fifth sweep — issues 42 to 45
+
+The last unread components and the build configuration.
+
+## Issue 42 — Tables showed raw codes while charts showed names
+
+✅ **Fixed**
+
+**What's wrong.** The dataset stores coded values — ownership is `G`/`P`/`PP`,
+`active` is `t`/`f`, professional type is `d`/`n`/`p`. The chart decodes these
+into "Government", "Private", "Doctor". **The result table did not.**
+
+**What it caused.** The same answer showed `G` in the table and "Government" in
+the chart beside it. Officials reading the table saw codes with no legend —
+exactly the values `GOVERNANCE.md` warns are not self-explanatory.
+
+**What was done.** The table now decodes through the same mapping the charts use,
+so the two agree.
+
+---
+
+## Issue 43 — The two Excel buttons produced different files
+
+✅ **Fixed**
+
+**What's wrong.** Both the table and the chart offer an Excel download. The chart's
+button passed a label formatter; **the table's did not.**
+
+**What it caused.** Two different spreadsheets from identical data depending on
+which button you pressed — one with "Government", one with `G`. Since these files
+get emailed onward, two versions of the same week's figures could circulate.
+
+**What was done.** Both paths now pass the same formatter. A related sizing bug
+went with it: column widths were computed from the *stored* value, so a column
+displaying "Government" was sized from the stored `"G"` and came out too narrow.
+
+---
+
+## Issue 44 — Horizontal bar charts exported as vertical columns
+
+✅ **Fixed**
+
+The chart engine deliberately turns bars sideways once there are many categories
+or the labels are long — that is what makes a 14-state ranking readable. The
+PowerPoint export hardcoded vertical columns, so the slide did not match the
+screen and long state names ended up crammed onto the category axis. The
+orientation is now passed through.
+
+---
+
+## Issue 45 — Dead-code checks were switched off, hiding real dead code
+
+🧪 Reproduced · ✅ **Fixed**
+
+**What's wrong.** `tsconfig.json` explicitly set `noUnusedLocals: false` and
+`noUnusedParameters: false` — the two compiler checks that catch dead code. (These
+are on by default in a standard Vite setup; they had been turned off.)
+
+**What it caused.** Dead code accumulated silently. Turning them on immediately
+surfaced three real instances:
+
+| Finding | Consequence |
+|---|---|
+| `AreaChart` imported from recharts, never used | Dead weight in the chart bundle |
+| `xIsTime` destructured, never read | Noise |
+| `formatTotal` imported into the Excel helper, never used | Noise |
+
+Following the first one up: `renderSeries` is only ever called with `"line"` and
+`"bar"`, because `allowedTypes()` never offers "area" and `defaultType()` folds a
+requested area chart into a line. So **the entire area-chart branch was
+unreachable** — it existed only to pull recharts' area modules into the build.
+
+**What was done.** All three removed, the unreachable branch deleted, and the
+checks left **on** so this cannot silently accumulate again. The build passes
+with them enabled.
+
+**Measured result:** the chart chunk went from **438.02 KB (125.75 KB gzipped) to
+408.15 KB (115.63 KB gzipped)** — 10 KB off the download, for deleting code that
+could never run.
+
+> One thing to note honestly: the main bundle grew by 1 KB, because the result
+> table now imports the label mapping from the chart engine (Issue 42). The chart
+> engine has no charting-library dependency, so this does not drag recharts into
+> the initial download — verified by the chart still building as a separate chunk.
+
+---
+
+# Also noted, deliberately not changed
+
+| Observation | Why it was left alone |
+|---|---|
+| The weekly deck defines its own `G`/`P`/`PP` and `d`/`n`/`p` decoders, duplicating the chart engine's | Both are correct today. Consolidating means refactoring a module with 98 tests behind it for a maintainability gain, so instead **both sites now carry a comment pointing at the other**, so whoever adds a new code sees it |
+| The report's date window (`2026-01-01`–`2026-07-10`) is hardcoded in the frontend and differs from the backend's `2024-07-01`–`2026-07-11` | Not a bug: most tables start Jan 2026 and only Scan & Pay reaches back to 2024, so the narrower picker is right *for a weekly report across all tables*. But it is a constant duplicated across the stack. The clean fix is a small endpoint exposing the window; that is a feature, not a cleanup |
+| `MessageBubble` is not memoised, so every past answer re-renders when a new one arrives | The expensive part — totals — is now memoised (Issue 42's change). Memoising the component needs the parent's callbacks wrapped too, and the remaining cost is ordinary React reconciliation of at most 100 table rows. Not worth the risk without a measurement showing it matters |
 
 ---
 
