@@ -22,25 +22,9 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
-logger = logging.getLogger(__name__)
+from app.domains import get_domain
 
-# Human-readable columns that list an INDIVIDUAL FACILITY (name/address). In the
-# ABDM dataset these are public dashboard data, so this is a granularity tier, not
-# a privacy control: only senior_analyst+ get per-facility listings; lower roles
-# work at aggregated geography level. Facility ID columns (hfr_id/hip_id/…) are
-# deliberately NOT here — they are the keys used in COUNT(DISTINCT ...) to count
-# facilities, which every role must be able to do. Geography columns are also not
-# here — they're needed for state/district analyses at every tier.
-FACILITY_COLUMNS = {
-    "facility_name",
-    "hospital_name",
-    "facility_address",
-}
-DISTRICT_COLUMNS = {
-    "district_code",
-    "district_name",
-    "district",  # numeric LGD code column in linked_facility / scan_pay_count
-}
+logger = logging.getLogger(__name__)
 
 ROLE_LEVELS = {"viewer": 0, "analyst": 1, "senior_analyst": 2, "admin": 3}
 
@@ -74,10 +58,26 @@ def check_rbac(sql: str, role: str) -> RbacResult:
             ),
         )
 
+    pack = get_domain()
     referenced = {c.name.lower() for c in stmt.find_all(exp.Column) if c.name}
 
-    facility_hits = sorted(referenced & FACILITY_COLUMNS)
-    district_hits = sorted(referenced & DISTRICT_COLUMNS)
+    facility_hits = sorted(referenced & pack.facility_tier_columns)
+    district_hits = sorted(referenced & pack.district_tier_columns)
+
+    # Row-level access: an un-aggregated SELECT against a table whose rows are
+    # individual records (a claim, a patient episode). This is a tier the
+    # column-name checks cannot catch — the query may name only innocuous
+    # columns and still return one row per person. Aggregate-only domains
+    # declare no such tables, so this is a no-op for them.
+    if level < ROLE_LEVELS["senior_analyst"] and _is_row_level(stmt, pack):
+        return RbacResult(
+            allowed=False,
+            reason=(
+                "That query would return individual records. Your role has "
+                "access to aggregated figures — try asking for counts or totals "
+                "grouped by state, district, or time period."
+            ),
+        )
 
     # senior_analyst (2) may use facility-level columns; analyst/viewer may not.
     if facility_hits and level < ROLE_LEVELS["senior_analyst"]:
@@ -103,3 +103,31 @@ def check_rbac(sql: str, role: str) -> RbacResult:
         )
 
     return RbacResult(allowed=True)
+
+
+def _is_row_level(stmt: exp.Expression, pack) -> bool:
+    """True if the query returns individual rows from a record-grain table.
+
+    "Aggregated" means the output projection contains an aggregate call, or the
+    query groups / distinct-ifies. A bare `SELECT col, col FROM claims LIMIT 50`
+    is row-level access however harmless its column list looks.
+    """
+    if not pack.row_level_tables:
+        return False
+
+    from app.domains import table_name
+
+    sensitive = {table_name(k).lower() for k in pack.row_level_tables}
+    touched = {
+        t.name.lower() for t in stmt.find_all(exp.Table) if t.name
+    }
+    if not (touched & sensitive):
+        return False
+
+    # Any aggregation anywhere makes this a summary, not a record listing.
+    if any(isinstance(n, exp.AggFunc) for n in stmt.walk()):
+        return False
+    for node in stmt.walk():
+        if isinstance(node, (exp.Group, exp.Distinct)):
+            return False
+    return True

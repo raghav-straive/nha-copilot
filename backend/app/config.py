@@ -21,21 +21,36 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Which scheme this deployment serves: "abdm" | "pmjay". Selects the domain
+    # pack — tables, governance prompt, PII list, RBAC tiers, data window, UI
+    # copy. See app/domains/ and docs/pmjay-migration.md. One process serves
+    # exactly one domain; run two instances to serve both.
+    domain: str = "abdm"
+
     # BigQuery
     gcp_project: str = "nha-conversational-analytics"
     bq_dataset: str = "nha_conversational_analytics"
-    # ABDM digital-adoption tables (no merged table — joined by facility ID /
-    # geography, see GOVERNANCE.md §10). Override any of these via the env if the
-    # loaded table names differ.
-    bq_facility_registry_table: str = "health_facility_registry"
-    bq_professionals_registry_table: str = "health_professionals_registry"
-    bq_top_indicators_table: str = "healthid_top_indicators"
-    bq_linked_trend_table: str = "healthid_linked_trend"
-    bq_linked_facility_table: str = "linked_facility"
-    bq_scan_share_table: str = "scan_and_share"
-    bq_scan_pay_table: str = "scan_pay_count"
-    bq_state_district_master_table: str = "state_district_master"
-    bq_bridge_integrator_table: str = "integrator_detail"
+    # ---- table-name overrides -------------------------------------------------
+    # Each domain pack ships the correct default table name for every table it
+    # declares; these fields exist only to override one from the environment,
+    # following the BQ_{TABLE_KEY}_TABLE convention. Left empty, the pack
+    # default is used. Setting one that the active domain does not declare has
+    # no effect.
+    # ABDM (no merged table — joined by facility ID / geography, GOVERNANCE.md §10)
+    bq_facility_registry_table: str = ""
+    bq_professionals_registry_table: str = ""
+    bq_top_indicators_table: str = ""
+    bq_linked_trend_table: str = ""
+    bq_linked_facility_table: str = ""
+    bq_scan_share_table: str = ""
+    bq_scan_pay_table: str = ""
+    bq_state_district_master_table: str = ""
+    bq_bridge_integrator_table: str = ""
+    # PM-JAY claims (TMS), beneficiaries (BIS), and the denormalised BIS ⟕ TMS
+    # table the co-pilot normally queries. See scripts/create_merged_table.sql.
+    bq_tms_table: str = ""
+    bq_bis_table: str = ""
+    bq_merged_table: str = ""
     # Auth to BigQuery — provide EITHER of these (inline JSON takes precedence):
     #   google_credentials_json : the full service-account key JSON, inline
     #   google_application_credentials : a path to the key file
@@ -128,27 +143,21 @@ class Settings(BaseSettings):
     def pdf_index_path(self) -> Path:
         return self._resolve(self.pdf_index_dir)
 
-    # Maps the GOVERNANCE.md placeholder keys to the configured table names. The keys
-    # here match the {..._TABLE} placeholders substituted in prompt_builder.
+    # Table resolution lives in app.domains (it needs the active pack's
+    # defaults). These delegate so existing call sites keep working; imported
+    # lazily because app.domains reads Settings.
     @property
     def table_map(self) -> dict[str, str]:
-        return {
-            "facility_registry": self.bq_facility_registry_table,
-            "professionals_registry": self.bq_professionals_registry_table,
-            "top_indicators": self.bq_top_indicators_table,
-            "linked_trend": self.bq_linked_trend_table,
-            "linked_facility": self.bq_linked_facility_table,
-            "scan_share": self.bq_scan_share_table,
-            "scan_pay": self.bq_scan_pay_table,
-            "state_district_master": self.bq_state_district_master_table,
-            "bridge_integrator": self.bq_bridge_integrator_table,
-        }
+        """Logical table key -> resolved bare table name, for the active domain."""
+        from app.domains import table_map
+
+        return table_map()
 
     def table_ref(self, which: str) -> str:
-        """Fully qualified, backtick-quoted BigQuery table reference for a
-        table_map key (e.g. 'facility_registry')."""
-        table = self.table_map.get(which, self.bq_facility_registry_table)
-        return f"`{self.gcp_project}.{self.bq_dataset}.{table}`"
+        """Fully qualified, backtick-quoted reference for a table key."""
+        from app.domains import table_ref
+
+        return table_ref(which)
 
 
 @lru_cache

@@ -1,4 +1,8 @@
-"""Weekly report service: helpers, concurrency, and failure isolation.
+"""Weekly report: shared helpers, concurrency, failure isolation, and the ABDM
+aggregates.
+
+The helpers are domain-agnostic and live in app.report.common; the aggregates
+live in the domain pack. app.report.service only dispatches.
 
 Uses a fake BigQuery client so nothing touches the cloud.
 """
@@ -6,45 +10,46 @@ from datetime import date
 
 import pytest
 
-from app.report import service as rs
+from app.domains.abdm import report as rs
+from app.report import common as rc
 
 
-# ---- number/date helpers ----
+# ---- number/date helpers (shared across domains) ----
 
 
 def test_num_coerces_and_defaults():
     import decimal
 
-    assert rs._num(None) == 0.0
-    assert rs._num(decimal.Decimal("12.5")) == 12.5
-    assert rs._num("7") == 7.0
-    assert rs._num("not a number") == 0.0
+    assert rc.num(None) == 0.0
+    assert rc.num(decimal.Decimal("12.5")) == 12.5
+    assert rc.num("7") == 7.0
+    assert rc.num("not a number") == 0.0
 
 
 def test_delta_computes_change_and_percent():
-    d = rs._delta(150.0, 100.0)
+    d = rc.delta(150.0, 100.0)
     assert d["prev"] == 100.0
     assert d["change"] == 50.0
     assert d["pct"] == 50.0
 
 
 def test_delta_handles_zero_previous_without_dividing_by_zero():
-    d = rs._delta(10.0, 0.0)
+    d = rc.delta(10.0, 0.0)
     assert d["change"] == 10.0
     assert d["pct"] is None, "percent change from zero is undefined, not infinite"
 
 
 def test_period_wraps_datetime_columns_but_not_date_columns():
     a, b = date(2025, 4, 1), date(2025, 4, 8)
-    assert rs._period("created_date", a, b) == (
+    assert rc.period("created_date", a, b) == (
         "created_date >= DATE('2025-04-01') AND created_date < DATE('2025-04-08')"
     )
     # DATETIME columns must be wrapped for day-level comparison (GOVERNANCE.md).
-    assert rs._period("date_created", a, b, True).startswith("DATE(date_created) >=")
+    assert rc.period("date_created", a, b, True).startswith("DATE(date_created) >=")
 
 
 def test_period_end_is_exclusive():
-    sql = rs._period("d", date(2025, 4, 1), date(2025, 4, 8))
+    sql = rc.period("d", date(2025, 4, 1), date(2025, 4, 8))
     assert "< DATE('2025-04-08')" in sql
     assert "<= DATE(" not in sql
 
@@ -84,7 +89,7 @@ class FakeBQ:
 
 def test_rows_many_runs_every_query_and_keys_results():
     bq = FakeBQ(responses={"ALPHA": [{"v": 1}], "BETA": [{"v": 2}]})
-    out = rs._rows_many(bq, {"a": "SELECT ALPHA", "b": "SELECT BETA"})
+    out = rc.rows_many(bq, {"a": "SELECT ALPHA", "b": "SELECT BETA"})
     assert out["a"] == [{"v": 1}]
     assert out["b"] == [{"v": 2}]
     assert len(bq.seen) == 2
@@ -93,7 +98,7 @@ def test_rows_many_runs_every_query_and_keys_results():
 def test_rows_many_isolates_a_failing_query():
     # One bad query must not take down the whole report.
     bq = FakeBQ(responses={"GOOD": [{"v": 9}]}, fail_on={"BAD"})
-    out = rs._rows_many(bq, {"good": "SELECT GOOD", "bad": "SELECT BAD"})
+    out = rc.rows_many(bq, {"good": "SELECT GOOD", "bad": "SELECT BAD"})
     assert out["good"] == [{"v": 9}]
     assert out["bad"] == [], "a failed query degrades to an empty list"
 
@@ -101,7 +106,7 @@ def test_rows_many_isolates_a_failing_query():
 def test_rows_many_handles_many_queries():
     bq = FakeBQ()
     queries = {f"q{i}": f"SELECT {i}" for i in range(25)}
-    out = rs._rows_many(bq, queries)
+    out = rc.rows_many(bq, queries)
     assert len(out) == 25
     assert len(bq.seen) == 25
 
@@ -110,7 +115,7 @@ def test_rows_many_converts_decimals():
     import decimal
 
     bq = FakeBQ(responses={"AMT": [{"amount": decimal.Decimal("10.50")}]})
-    out = rs._rows_many(bq, {"a": "SELECT AMT"})
+    out = rc.rows_many(bq, {"a": "SELECT AMT"})
     assert out["a"] == [{"amount": 10.5}]
     assert isinstance(out["a"][0]["amount"], float)
 

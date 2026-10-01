@@ -11,14 +11,19 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
-# PII columns that must never be returned to a user. In the ABDM dataset,
-# facility identity (name/id/address) is PUBLIC dashboard data and is allowed;
-# the only patient-identifying column is `abha_address`, which is removed at the
-# data-prep stage. This is a hard backstop in case a future refresh reintroduces
-# it (or any obviously patient-identifying column). Matched case-insensitively.
-PII_COLUMNS = {
-    "abha_address",
-}
+from app.domains import get_domain
+
+
+def pii_columns() -> frozenset[str]:
+    """PII columns for the active domain, matched case-insensitively.
+
+    Domain-specific by necessity: ABDM facility identity is public dashboard
+    data, so its list is a one-entry backstop; PM-JAY is patient-level and its
+    list is 20+ columns including Aadhaar, mobile and bank details. Read through
+    the pack rather than hardcoded, so a PM-JAY deployment cannot accidentally
+    run with ABDM's near-empty list.
+    """
+    return get_domain().pii_columns
 
 # Statement types that are categorically rejected even if somehow parsed.
 _FORBIDDEN_EXPR = (
@@ -96,17 +101,18 @@ def validate_sql(sql: str) -> ValidationResult:
             )
 
     # PII column scan across all referenced column names.
+    pii = pii_columns()
     hits = sorted(
         {
             col.name.lower()
             for col in stmt.find_all(exp.Column)
-            if col.name and col.name.lower() in PII_COLUMNS
+            if col.name and col.name.lower() in pii
         }
     )
     # Also catch aliased projections like `SELECT abha_address AS a`.
     for alias in stmt.find_all(exp.Alias):
         inner = alias.this
-        if isinstance(inner, exp.Column) and inner.name.lower() in PII_COLUMNS:
+        if isinstance(inner, exp.Column) and inner.name.lower() in pii:
             hits.append(inner.name.lower())
 
     hits = sorted(set(hits))

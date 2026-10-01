@@ -1,38 +1,27 @@
 """Live schema introspection.
 
-Fetches the ACTUAL column names + types of the ABDM tables from BigQuery
-INFORMATION_SCHEMA at startup and formats them for injection into the system
-prompt. This keeps the LLM's type knowledge correct regardless of how the tables
-were typed on load. Ground truth beats a hand-maintained schema.
+Fetches the ACTUAL column names + types of the active domain's tables from
+BigQuery INFORMATION_SCHEMA at startup and formats them for injection into the
+system prompt. This keeps the LLM's type knowledge correct regardless of how the
+tables were typed on load. Ground truth beats a hand-maintained schema — and it
+is why retargeting to another scheme gets correct column types for free.
 """
 from __future__ import annotations
 
 import logging
 
 from app.config import get_settings
+from app.domains import get_domain
 
 logger = logging.getLogger(__name__)
 
 _cache: dict[str, list[tuple[str, str]]] | None = None
 
 
-# table_map key -> the ### heading used in the prompt block.
-_TABLE_LABELS = {
-    "facility_registry": "Facility registry",
-    "professionals_registry": "Professionals registry (HPR)",
-    "top_indicators": "ABHA top indicators",
-    "linked_trend": "Health-record linking trend",
-    "linked_facility": "Facility-bridge links",
-    "scan_share": "Scan & Share",
-    "scan_pay": "Scan & Pay",
-    "state_district_master": "State/district master",
-    "bridge_integrator": "Bridge / integrator detail",
-}
-
-
 def load_schemas(force: bool = False) -> dict[str, list[tuple[str, str]]]:
-    """Fetch (column, type) lists for every ABDM table. Cached. Safe to call
-    anytime; returns {} if BigQuery is unreachable (e.g. offline unit tests).
+    """Fetch (column, type) lists for every table in the active domain. Cached.
+    Safe to call anytime; returns {} if BigQuery is unreachable (e.g. offline
+    unit tests).
 
     One query covering every table, not one query per table: this runs on the
     startup path, and nine sequential round-trips at ~1-2s of job latency each
@@ -83,6 +72,7 @@ def get_schema_text() -> str:
     if not _cache:
         return ""
     s = get_settings()
+    pack = get_domain()
     lines = [
         "",
         "---",
@@ -94,9 +84,9 @@ def get_schema_text() -> str:
         "- INT64/NUMERIC/FLOAT64 are numeric; STRING needs quotes.",
         "",
     ]
-    for key, table in s.table_map.items():
+    for key in s.table_map:
         if key in _cache:
-            label = _TABLE_LABELS.get(key, key)
+            label = pack.label_for(key)
             cols = ", ".join(f"{c} {t}" for c, t in _cache[key])
             lines.append(f"### {label} — `{s.table_ref(key)}`")
             lines.append(cols)

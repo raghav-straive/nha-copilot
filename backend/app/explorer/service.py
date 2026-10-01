@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
 from app.config import get_settings
+from app.domains import get_domain
 from app.nl_to_sql.client import get_explorer_llm
 from app.nl_to_sql.pipeline import run_turn
 from app.query_log.logger import log_query
@@ -31,8 +32,12 @@ def _disk_cache_path(role: str):
     # Persisted so a second uvicorn worker (or a restart) reuses the cards
     # instead of regenerating them. Unlike the PDF index, Explorer had no disk
     # cache at all, so every worker genuinely paid the full AI cost.
+    #
+    # Keyed on domain as well as role: two instances serving different schemes
+    # may be pointed at the same cache directory, and ABDM cards surfacing in a
+    # PM-JAY deployment would be both wrong and confusing.
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in role) or "role"
-    return get_settings().pdf_index_path / f"explorer_{safe}.json"
+    return get_settings().pdf_index_path / f"explorer_{get_domain().key}_{safe}.json"
 
 
 def _load_disk_cache(role: str) -> dict | None:
@@ -55,24 +60,6 @@ def _save_disk_cache(role: str, payload: dict) -> None:
     except Exception:  # noqa: BLE001
         logger.warning("Could not write Explorer cache", exc_info=True)
 
-_PROPOSE_SYSTEM = (
-    "You are a data-exploration assistant for India's ABDM (Ayushman Bharat "
-    "Digital Mission) adoption analytics. Propose diverse, insightful, NON-OBVIOUS "
-    "analytical questions an ABDM/NHA official would find worth investigating — "
-    "each answerable by a single aggregate query over the ABDM data. Cover "
-    "different angles across the set: ABHA (health ID) creation, facility "
-    "registration (by ownership Government/Private and facility type), health-"
-    "professional registration (doctor/nurse/pharmacist), health-record linking "
-    "volumes and document types, Scan & Share and Scan & Pay transaction volumes "
-    "and payment amounts/status, bridge/software-vendor adoption, and geography "
-    "(states/districts). Prefer questions that reveal concentration, imbalance, "
-    "leaders/laggards, or gaps. Avoid anything needing data outside these tables "
-    "(no budgets). Keep each question concrete and self-contained. Return JSON: "
-    '{"insights":[{"title":"short catchy title","question":"natural-language '
-    'question to ask the analytics tool","why":"one line on why it matters"}]}'
-)
-
-
 def _jsonable(obj):
     if isinstance(obj, list):
         return [_jsonable(x) for x in obj]
@@ -88,7 +75,7 @@ def _jsonable(obj):
 def _propose(n: int) -> list[dict]:
     llm = get_explorer_llm()
     try:
-        out = llm.generate_json(_PROPOSE_SYSTEM, f"Propose {n} questions.")
+        out = llm.generate_json(get_domain().explorer_system, f"Propose {n} questions.")
     except Exception:  # noqa: BLE001
         logger.warning("Explorer proposal failed", exc_info=True)
         return []

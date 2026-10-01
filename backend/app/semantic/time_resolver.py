@@ -1,8 +1,11 @@
 """Natural-language time reference resolution.
 
 Converts phrases like "last quarter", "Q2 2025-26", "last month" into explicit
-[start, end) date ranges. Also knows the ABDM prototype's overall data window and
+[start, end) date ranges. Also knows the active domain's overall data window and
 flags requests that fall entirely outside it.
+
+The parsing itself (financial years, quarters, ISO dates, relative phrases) is
+scheme-agnostic; only the data window is domain-specific and comes from the pack.
 
 Dates are resolved relative to a supplied `today` (defaults to the real current
 date) so the module is deterministic in tests.
@@ -13,12 +16,17 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-# ABDM prototype data window (broadest span across all tables; scan_pay_count
-# reaches back to 2024-07-26, the rest start 2026-01-01, all end ~2026-07-10).
-# The model knows the precise per-table ranges from GOVERNANCE.md §10; this is a
-# coarse "is the whole ask before/after any data exists" guard.
-DATA_WINDOW_START = date(2024, 7, 1)
-DATA_WINDOW_END = date(2026, 7, 11)  # exclusive upper bound
+from app.domains import get_domain
+
+
+def _data_window() -> tuple[date, date, str]:
+    """The active domain's coarse data window: (start, end-exclusive, note).
+
+    The model knows precise per-table ranges from the governance doc; this is
+    only a "is the whole ask before/after any data exists" guard.
+    """
+    pack = get_domain()
+    return pack.data_window_start, pack.data_window_end, pack.data_window_note
 
 
 @dataclass
@@ -157,14 +165,14 @@ class TimeResolver:
         return TimeResolution(status="none")
 
     def _finalize(self, start: date, end: date, label: str) -> TimeResolution:
-        # Overlap check against the overall ABDM data window.
-        outside = end <= DATA_WINDOW_START or start >= DATA_WINDOW_END
+        # Overlap check against the active domain's data window.
+        win_start, win_end, win_note = _data_window()
+        outside = end <= win_start or start >= win_end
         note = None
         if outside:
             note = (
                 f"The requested period ({label}) is outside the available data "
-                f"window. Most ABDM tables cover Jan–Jul 2026 (Scan & Pay reaches "
-                f"back to mid-2024); there is no data beyond mid-July 2026."
+                f"window. {win_note}"
             )
         return TimeResolution(
             status="resolved",

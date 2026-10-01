@@ -1,40 +1,32 @@
-"""Builds the system prompt (GOVERNANCE.md) and the per-turn user prompt.
+"""Builds the system prompt (the active domain's GOVERNANCE.md) and the per-turn
+user prompt.
 
-GOVERNANCE.md is loaded once and cached. The `{..._TABLE}` placeholders (one per
-ABDM table) are replaced with the fully-qualified, backtick-quoted table refs
-from config so the governance doc stays deployment-agnostic.
+The governance doc is loaded once and cached. Its `{..._TABLE}` placeholders are
+replaced with fully-qualified, backtick-quoted table refs so the doc stays
+deployment-agnostic. Placeholder names are DERIVED from the pack's table keys
+(`facility_registry` -> `{FACILITY_REGISTRY_TABLE}`), so adding a table means
+touching one dict in the pack rather than three places that could drift.
 """
 from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 
-from app.config import BACKEND_DIR, get_settings
-
-GOVERNANCE_PATH = BACKEND_DIR / "GOVERNANCE.md"
-
-
-# GOVERNANCE.md placeholder -> table_map key.
-_PLACEHOLDERS = {
-    "{FACILITY_REGISTRY_TABLE}": "facility_registry",
-    "{PROFESSIONALS_REGISTRY_TABLE}": "professionals_registry",
-    "{TOP_INDICATORS_TABLE}": "top_indicators",
-    "{LINKED_TREND_TABLE}": "linked_trend",
-    "{LINKED_FACILITY_TABLE}": "linked_facility",
-    "{SCAN_SHARE_TABLE}": "scan_share",
-    "{SCAN_PAY_TABLE}": "scan_pay",
-    "{STATE_DISTRICT_MASTER_TABLE}": "state_district_master",
-    "{BRIDGE_INTEGRATOR_TABLE}": "bridge_integrator",
-}
+from app.domains import get_domain, governance_path, table_ref
 
 
 @lru_cache
-def _load_governance() -> str:
-    settings = get_settings()
-    text = Path(GOVERNANCE_PATH).read_text(encoding="utf-8")
-    for placeholder, key in _PLACEHOLDERS.items():
-        text = text.replace(placeholder, settings.table_ref(key))
+def _load_governance(domain_key: str) -> str:
+    """Substituted governance doc for one domain.
+
+    Keyed on the domain so the cache cannot serve ABDM's prompt to a PM-JAY
+    process (which would generate confidently wrong SQL against tables that do
+    not exist).
+    """
+    pack = get_domain(domain_key)
+    text = governance_path().read_text(encoding="utf-8")
+    for key in pack.table_keys:
+        text = text.replace(pack.placeholder(key), table_ref(key))
     return text
 
 
@@ -51,7 +43,7 @@ def load_system_prompt() -> str:
     """
     from app.db.schema import get_schema_text
 
-    return _load_governance() + get_schema_text()
+    return _load_governance(get_domain().key) + get_schema_text()
 
 
 def build_user_prompt(
