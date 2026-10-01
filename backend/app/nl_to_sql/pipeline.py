@@ -19,6 +19,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.db.bigquery_client import get_bigquery_client
+from app.domains import get_domain
 from app.nl_to_sql.client import get_llm_client
 from app.nl_to_sql.prompt_builder import build_user_prompt, load_system_prompt
 from app.semantic.geography import get_geography
@@ -403,23 +404,15 @@ def _build_chips(resolved: dict, session_context: dict | None) -> dict:
     return chips
 
 
-_ANALYSIS_SYSTEM = (
-    "You are a senior data analyst for India's ABDM (Ayushman Bharat Digital "
-    "Mission) — health facility/professional registries, ABHA creation, "
-    "health-record linking, and Scan & Share / Scan & Pay adoption. You are "
-    "given the ACTUAL results of a database query. Analyse the "
-    "numbers and return a JSON object with keys: "
-    '{"summary": string, "insights": string[], "trends": string[]}. '
-    "Rules: base EVERY statement strictly on the data provided — cite specific "
-    "categories and figures (largest/smallest, totals, shares/percentages, notable "
-    "gaps or concentration). Give 2–4 `insights`, each one concise sentence. Put "
-    "items in `trends` ONLY if there is a time or naturally ordered dimension "
-    "(otherwise return an empty list). Never invent data not present. LANGUAGE — "
-    "MIRROR THE SCRIPT of the user's question: Devanagari characters in the "
-    "question → write in Hindi Devanagari (do NOT romanize); Latin English → "
-    "English; Latin Hindi/mixed (Hinglish) → Hinglish in Latin. Devanagari in → "
-    "Devanagari out; Latin in → Latin out."
-)
+def _analysis_system() -> str:
+    """The second-pass analysis prompt, from the active domain pack.
+
+    It used to be a module constant here. That is the wrong home: it names the
+    scheme and its metrics, so a platform module was telling the model which
+    programme's data it was looking at — which means it would survive a domain
+    change untouched and silently mislabel every insight.
+    """
+    return get_domain().analysis_system
 
 
 def analyze_results(
@@ -448,7 +441,7 @@ def analyze_results(
         f"Data (JSON, up to 50 rows):\n{json.dumps(sample, default=str)}"
     )
     try:
-        out = llm.generate_json(_ANALYSIS_SYSTEM, user)
+        out = llm.generate_json(_analysis_system(), user)
     except Exception:  # noqa: BLE001
         logger.warning("Analysis pass failed", exc_info=True)
         return None

@@ -98,6 +98,24 @@ EXPLORER_SYSTEM = (
     'question to ask the analytics tool","why":"one line on why it matters"}]}'
 )
 
+ANALYSIS_SYSTEM = (
+    "You are a senior data analyst for India's ABDM (Ayushman Bharat Digital "
+    "Mission) — health facility/professional registries, ABHA creation, "
+    "health-record linking, and Scan & Share / Scan & Pay adoption. You are "
+    "given the ACTUAL results of a database query. Analyse the "
+    "numbers and return a JSON object with keys: "
+    '{"summary": string, "insights": string[], "trends": string[]}. '
+    "Rules: base EVERY statement strictly on the data provided — cite specific "
+    "categories and figures (largest/smallest, totals, shares/percentages, notable "
+    "gaps or concentration). Give 2–4 `insights`, each one concise sentence. Put "
+    "items in `trends` ONLY if there is a time or naturally ordered dimension "
+    "(otherwise return an empty list). Never invent data not present. LANGUAGE — "
+    "MIRROR THE SCRIPT of the user's question: Devanagari characters in the "
+    "question → write in Hindi Devanagari (do NOT romanize); Latin English → "
+    "English; Latin Hindi/mixed (Hinglish) → Hinglish in Latin. Devanagari in → "
+    "Devanagari out; Latin in → Latin out."
+)
+
 # ---- frontend copy & coded values -----------------------------------------
 # Served to the SPA by GET /meta so one build serves both deployments.
 # columnMaps was duplicated between lib/chartEngine.ts and lib/reportPptx.ts
@@ -160,6 +178,7 @@ PACK = DomainPack(
     data_window_note=DATA_WINDOW_NOTE,
     explorer_system=EXPLORER_SYSTEM,
     report_system=REPORT_SYSTEM,
+    analysis_system=ANALYSIS_SYSTEM,
     build_report=build_weekly_report,
     ui=UI,
 )

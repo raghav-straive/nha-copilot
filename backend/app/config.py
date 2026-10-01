@@ -21,10 +21,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Which scheme this deployment serves: "abdm" | "pmjay". Selects the domain
-    # pack — tables, governance prompt, PII list, RBAC tiers, data window, UI
-    # copy. See app/domains/ and docs/pmjay-migration.md. One process serves
-    # exactly one domain; run two instances to serve both.
+    # Which scheme this deployment serves. This tool is ABDM-only; PM-JAY is a
+    # separate tool in its own repository (docs/pmjay-migration.md). The setting
+    # exists so the active pack is explicit and a misconfiguration fails loudly
+    # rather than silently serving the wrong rules.
     domain: str = "abdm"
 
     # BigQuery
@@ -46,11 +46,6 @@ class Settings(BaseSettings):
     bq_scan_pay_table: str = ""
     bq_state_district_master_table: str = ""
     bq_bridge_integrator_table: str = ""
-    # PM-JAY claims (TMS), beneficiaries (BIS), and the denormalised BIS ⟕ TMS
-    # table the co-pilot normally queries. See scripts/create_merged_table.sql.
-    bq_tms_table: str = ""
-    bq_bis_table: str = ""
-    bq_merged_table: str = ""
     # Auth to BigQuery — provide EITHER of these (inline JSON takes precedence):
     #   google_credentials_json : the full service-account key JSON, inline
     #   google_application_credentials : a path to the key file

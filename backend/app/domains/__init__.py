@@ -16,16 +16,21 @@ DOMAINS_DIR = Path(__file__).resolve().parent
 
 @lru_cache
 def available_domains() -> tuple[str, ...]:
-    return ("abdm", "pmjay")
+    return ("abdm",)
 
 
 @lru_cache
 def get_domain(key: str | None = None) -> DomainPack:
     """The active pack. Defaults to the DOMAIN setting.
 
-    Raises on an unknown key rather than silently falling back: serving ABDM
-    rules against PM-JAY tables would produce confidently wrong SQL, and the PII
-    list would be the wrong one.
+    This tool serves ABDM only. PM-JAY is a SEPARATE tool in its own repository
+    (see docs/pmjay-migration.md) — deliberately not a second pack here, so no
+    PM-JAY table, rule or PII list can load in an ABDM process, or vice versa.
+    The pack boundary is what let the two be split cleanly, and is kept so
+    platform fixes port between the two repositories.
+
+    Raises on an unknown key rather than silently falling back: the wrong pack
+    means the wrong PII list and confidently wrong SQL.
     """
     if key is None:
         from app.config import get_settings
@@ -34,10 +39,6 @@ def get_domain(key: str | None = None) -> DomainPack:
     key = (key or "").strip().lower()
     if key == "abdm":
         from app.domains.abdm import PACK
-
-        return PACK
-    if key == "pmjay":
-        from app.domains.pmjay import PACK
 
         return PACK
     raise ValueError(

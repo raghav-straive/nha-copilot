@@ -62,6 +62,11 @@ class DomainPack:
     governance_file: str = "GOVERNANCE.md"  # resolved inside the pack directory
     explorer_system: str = ""
     report_system: str = ""
+    # The second-pass prompt that turns fetched rows into a summary + insights.
+    # It lives here, not in nl_to_sql.pipeline, because it names the scheme and
+    # its metrics — leaving it in the platform is how a module ends up quietly
+    # telling the model it is analysing a different programme's data.
+    analysis_system: str = ""
 
     # --- weekly report ---
     # None means this domain has no weekly report; the endpoint 404s.
