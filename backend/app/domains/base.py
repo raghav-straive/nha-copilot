@@ -10,7 +10,7 @@ cycle.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Protocol
 
@@ -72,10 +72,11 @@ class DomainPack:
     # None means this domain has no weekly report; the endpoint 404s.
     build_report: Callable | None = None
 
-    # --- frontend ---
-    # Copy and coded-value maps served to the SPA by GET /meta, so one frontend
-    # build serves both deployments. Shape is validated in tests.
-    ui: dict = field(default_factory=dict)
+    # NOTE: there is deliberately no `ui` field here. UI copy and coded-value
+    # maps live in the frontend, because this repository's frontend only ever
+    # serves one scheme — shipping them from the backend too would mean two
+    # sources of truth for the same strings, which is the drift this pack
+    # exists to prevent.
 
     # ----- derived -----
     def placeholder(self, key: str) -> str:

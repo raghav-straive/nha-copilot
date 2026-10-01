@@ -128,6 +128,37 @@ def test_the_governance_doc_has_no_unsubstituted_placeholders():
         )
 
 
+def test_every_pack_field_is_actually_read_by_the_platform():
+    """A field nobody reads is a second source of truth waiting to drift.
+
+    `ui` was one: UI copy and coded-value maps were declared on the pack AND in
+    frontend/src/domain.ts, and only the frontend copy was ever used — exactly
+    the duplication the pack exists to remove.
+    """
+    import dataclasses
+
+    from app.domains.base import DomainPack
+
+    names = {f.name for f in dataclasses.fields(DomainPack)}
+    assert "ui" not in names, (
+        "`ui` is back on DomainPack. UI copy belongs in frontend/src/domain.ts; "
+        "declaring it here too means two sources of truth for the same strings."
+    )
+
+    # Every remaining field must be referenced somewhere outside base.py.
+    searchable = ""
+    for py in sorted((APP).rglob("*.py")):
+        if py.name == "base.py":
+            continue
+        searchable += py.read_text(encoding="utf-8")
+    structural = {"key", "label", "tables", "governance_file"}  # used via helpers
+    unread = [
+        n for n in names - structural
+        if n not in searchable
+    ]
+    assert not unread, f"DomainPack fields declared but never read: {unread}"
+
+
 def test_an_unknown_domain_is_refused_rather_than_defaulted():
     """Falling back to a default pack would mean the wrong PII list and
     confidently wrong SQL against tables that do not exist."""

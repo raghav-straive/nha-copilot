@@ -116,52 +116,6 @@ ANALYSIS_SYSTEM = (
     "Devanagari out; Latin in → Latin out."
 )
 
-# ---- frontend copy & coded values -----------------------------------------
-# Served to the SPA by GET /meta so one build serves both deployments.
-# columnMaps was duplicated between lib/chartEngine.ts and lib/reportPptx.ts
-# (the weekly deck is built without the chart engine); this is now the one copy.
-UI = {
-    "scheme": "ABDM",
-    "schemeFull": "Ayushman Bharat Digital Mission",
-    "tagline": "Ask ABDM digital-adoption data in natural language.",
-    "subtitle": "ABDM digital-adoption analytics",
-    "hint": (
-        "Plain English works — the co-pilot picks the right ABDM data "
-        "(registrations, ABHA, linking, or transactions) and shows the SQL it used."
-    ),
-    "disclaimer": (
-        "Answers are generated from ABDM adoption data (prototype). "
-        "Verify the SQL before acting on results."
-    ),
-    "exportFooter": "NHA Analytics Co-Pilot — ABDM adoption data (prototype). Verify before use.",
-    "reportTitle": "ABDM Weekly Report",
-    "reportFilePrefix": "ABDM-weekly-report",
-    "noReportData": "No ABDM activity found for this week. Pick a week within Jan-Jul 2026.",
-    "sampleQuestions": [
-        "How many facilities are registered by ownership type?",
-        "ABHA created by state this quarter",
-        "Top bridges by active facility links",
-        "Bihar mein kitne ABHA banaye gaye?",
-    ],
-    "columnMaps": {
-        "hpr_type": {"d": "Doctor", "n": "Nurse", "p": "Pharmacist",
-                     "D": "Doctor", "N": "Nurse", "P": "Pharmacist"},
-        "active": {"t": "Active", "f": "Inactive",
-                   "true": "Active", "false": "Inactive"},
-        # facility_ownership / partner_ownership are coded G/P/PP (unlike
-        # `ownership` and facility_ownership_desc, which are already full text).
-        "facility_ownership": {"G": "Government", "P": "Private", "PP": "Public-Private"},
-        "partner_ownership": {"G": "Government", "P": "Private", "PP": "Public-Private"},
-    },
-    # Heuristic value-set detection for coded columns whose name we don't know.
-    "valueSets": [
-        {"sig": ["d", "n", "p"], "keys": ["d", "n", "p"],
-         "map": {"d": "Doctor", "n": "Nurse", "p": "Pharmacist"}},
-        {"sig": ["t", "f"], "keys": ["t", "f"],
-         "map": {"t": "Active", "f": "Inactive"}},
-    ],
-}
-
 PACK = DomainPack(
     key="abdm",
     label="ABDM Digital Adoption",
@@ -180,5 +134,4 @@ PACK = DomainPack(
     report_system=REPORT_SYSTEM,
     analysis_system=ANALYSIS_SYSTEM,
     build_report=build_weekly_report,
-    ui=UI,
 )
